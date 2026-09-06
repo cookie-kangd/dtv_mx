@@ -24,8 +24,8 @@ android {
     applicationId = "dtv.mobile"
     minSdk = 24
     targetSdk = 36
-    versionCode = 49
-    versionName = "0.2.6"
+    versionCode = 50
+    versionName = "0.2.7"
 
     // 只打包真机使用的 ARM 架构。抖音签名依赖的 libquickjs.so 原本会打包
     // 4 种 ABI（约 3.05MB），其中 x86 / x86_64 合计 1.73MB 在手机上永远用不到。

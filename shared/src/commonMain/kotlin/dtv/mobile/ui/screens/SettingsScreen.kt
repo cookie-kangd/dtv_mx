@@ -367,11 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.5"
+private const val LAST_RELEASE_VERSION = "0.2.6"
 private val LAST_RELEASE_NOTES = listOf(
-  "横屏播放设置面板可读性优化",
-  "平台排序支持查看全部平台（含已关闭）",
-  "分类胶囊按压缩放反馈",
+  "横屏播放设置面板改为实心深色底，选项清晰可读",
+  "分类较多的平台分类收纳进顶栏下拉菜单，新增推荐入口",
+  "背景渐变绘制缓存，滚动与切页更省资源",
 ).joinToString("\n") { "· $it" }
 
 @Composable
@@ -1157,7 +1157,7 @@ private fun BasicSettingsSection(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text("默认横屏", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
           Text(
-            text = "开启后点进任意直播间默认以横屏全屏观看，更贴合大屏看直播的体验；关闭则保持竖屏进入。该设置会持久保存，重启 App 后仍保持当前开关状态。",
+            text = "开启后点进任意直播间默认以横屏全屏观看，更贴合大屏看直播的体验；关闭则保持竖屏进入（平板等系统本身就是横屏的设备，也会以竖屏进入直播间）。该设置会持久保存，重启 App 后仍保持当前开关状态。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
           )

@@ -32,6 +32,11 @@ import androidx.compose.ui.window.PopupProperties
  * 用法：放在锚点 Box 内（与触发按钮同层），面板右对齐锚点右上角、
  * 向下偏移 [offsetY] 展开为一个大圆角卡片（描边 + 阴影）。
  * 点击面板外部 / 按返回键自动收起（PopupProperties 原生行为）。
+ *
+ * [focusable] 默认 true。面板需要「抢焦点」时（如分类下拉）保持默认；
+ * 面板与输入框同时存在的场景（如搜索联想面板）必须传 false——
+ * 可获取焦点的 Popup 会把焦点从文本框抢走，表现为「输入第一个字符后
+ * 输入法自动收起、后续字符全部丢失」。
  */
 @Composable
 fun RoundedDropdownMenu(
@@ -41,6 +46,7 @@ fun RoundedDropdownMenu(
   offsetY: Dp = 6.dp,
   width: Dp? = null,
   maxHeight: Dp? = null,
+  focusable: Boolean = true,
   content: @Composable ColumnScope.() -> Unit,
 ) {
   if (!expanded) return
@@ -50,8 +56,8 @@ fun RoundedDropdownMenu(
     offset = IntOffset(0, offsetYpx),
     onDismissRequest = onDismissRequest,
     properties = PopupProperties(
-      focusable = true,
-      dismissOnBackPress = true,
+      focusable = focusable,
+      dismissOnBackPress = focusable,
       dismissOnClickOutside = true,
     ),
   ) {

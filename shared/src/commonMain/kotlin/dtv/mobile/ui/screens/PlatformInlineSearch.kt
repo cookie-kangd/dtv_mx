@@ -37,7 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +47,7 @@ import dtv.mobile.model.Streamer
 import dtv.mobile.state.AppState
 import dtv.mobile.ui.components.NetworkImage
 import dtv.mobile.ui.components.RoundedDropdownMenu
+import dtv.mobile.ui.system.PlatformBackHandler
 import dtv.mobile.util.formatViewerCountWanIfNeeded
 import dtv.mobile.util.normalizeHttpUrl
 import kotlinx.coroutines.delay
@@ -62,7 +65,12 @@ fun PlatformInlineSearch(
   var query by remember { mutableStateOf("") }
   var results by remember(appState.selectedPlatform) { mutableStateOf(emptyList<Streamer>()) }
   var searching by remember(appState.selectedPlatform) { mutableStateOf(false) }
+  // 输入框是否持有焦点：面板不可抢焦点，因此只有点到别处才会丢焦点；
+  // 丢焦点后延迟一小段时间再收起面板——既保证点空白能自动收起，
+  // 又不会在「点击联想结果」的输入手势中途把面板撤掉（否则点击会丢失）。
+  var fieldFocused by remember { mutableStateOf(false) }
   val platform = appState.selectedPlatform
+  val focusManager = LocalFocusManager.current
 
   LaunchedEffect(platform, query) {
     val trimmed = query.trim()
@@ -80,6 +88,18 @@ fun PlatformInlineSearch(
 
   fun closePanel() {
     query = ""
+    focusManager.clearFocus()
+  }
+
+  // 联想面板不可获焦（fix 输入丢字符），系统返回键无法自动收起它，
+  // 这里显式接管：面板展开时按返回键先收面板，不直接退出当前页。
+  PlatformBackHandler(enabled = query.isNotBlank()) { closePanel() }
+
+  // 焦点丢失（点到别处）后延迟收起：见 fieldFocused 注释
+  LaunchedEffect(fieldFocused, query) {
+    if (fieldFocused || query.isBlank()) return@LaunchedEffect
+    delay(250)
+    closePanel()
   }
 
   Box(modifier = modifier) {
@@ -117,7 +137,12 @@ fun PlatformInlineSearch(
         BasicTextField(
           value = query,
           onValueChange = { query = it },
-          modifier = Modifier.weight(1f).height(44.dp),
+          modifier = Modifier
+            .weight(1f)
+            .height(44.dp)
+            // 联想面板不可获取焦点（focusable = false），输入框始终保持焦点，
+            // 输入第一个字符后输入法不会被抢走、后续字符也不会丢。
+            .onFocusChanged { state -> fieldFocused = state.isFocused },
           singleLine = true,
           textStyle = MaterialTheme.typography.bodyMedium.copy(
             color = MaterialTheme.colorScheme.onSurface,
@@ -157,6 +182,9 @@ fun PlatformInlineSearch(
       offsetY = 50.dp,
       width = 320.dp,
       maxHeight = 420.dp,
+      // 关键：联想面板不能抢焦点，否则输入第一个字符后焦点被 Popup 夺走，
+      // 输入法自动收起且后续字符全部丢失（例如连打两个 y 只进一个）。
+      focusable = false,
     ) {
       when {
         searching -> {

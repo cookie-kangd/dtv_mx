@@ -186,6 +186,11 @@ fun PlayerScreen(
   // 根因：关闭过程中 streamer 会短暂变化，触发 remember(streamer?.roomId) 重新初始化，
   // 把 fullscreen/fullscreenEntry 复位成「默认横屏」状态，画面在 dispose 前闪现横屏。
   var isClosing by remember { mutableStateOf(false) }
+  // 进入直播间那一帧的设备方向（true=设备本身是横屏，如平板）。
+  // 用于区分「平板这类进房时就是横屏的设备」与「手机播放中主动转屏」：
+  // 前者在未开启「默认横屏」时必须锁竖屏，后者仍保留转屏自动全屏的原有行为。
+  // 只在首帧锁存一次，避免锁竖屏后方向变化导致锁定条件来回翻转（抖动）。
+  var entryLandscape by remember(streamer?.roomId) { mutableStateOf<Boolean?>(null) }
 
   val scope = rememberCoroutineScope()
   // 当前直播间 roomId 的实时快照。异步解析播放地址返回后要拿它判定结果是否仍属于当前房间：
@@ -485,10 +490,21 @@ fun PlayerScreen(
     val isPortraitLayout = maxHeight >= maxWidth
     val isLandscapeLayout = !isPortraitLayout
 
+    // 未开启「默认横屏」时，若进房瞬间设备就是横屏（平板），强制锁定竖屏：
+    // 进直播间不再跟随系统方向，退出一次即可回到竖屏（无需退出两次）。
+    // 用户主动点全屏按钮 / 开启「默认横屏」时该锁定自动让位给横屏。
+    val forcePortrait = entryLandscape == true &&
+      !appState.landscapeEnabled &&
+      !fullscreen &&
+      fullscreenEntry == FullscreenEntry.None &&
+      !isInPip &&
+      !isClosing
+
     FullscreenEffect(
       enabled = fullscreen && !isClosing && !isInPip,
       lockLandscape = fullscreenEntry == FullscreenEntry.Manual && !isClosing,
       exitToPortrait = fullscreenEntry == FullscreenEntry.ManualOff || isClosing,
+      forcePortrait = forcePortrait,
     )
     // 手势返回（含安卓系统手势返回 / 三键返回）统一在此拦截：
     // 默认横屏进入直播间后第一次返回 -> 退出全屏、转回竖屏、仍停留在播放器内；
@@ -680,6 +696,12 @@ fun PlayerScreen(
 
     LaunchedEffect(isLandscapeLayout) {
       if (isClosing || isInPip) return@LaunchedEffect
+      // 锁存进房时的设备方向；进房即横屏且未开「默认横屏」（平板）时不走自动全屏，
+      // 由 forcePortrait 锁竖屏，避免「平板进直播间默认横屏」。
+      if (entryLandscape == null) {
+        entryLandscape = isLandscapeLayout
+        if (isLandscapeLayout && !appState.landscapeEnabled) return@LaunchedEffect
+      }
       // Rotating to landscape should behave like fullscreen (hide bottom bar, system bars).
       if (isLandscapeLayout && !fullscreen && fullscreenEntry != FullscreenEntry.ManualOff) {
         fullscreen = true

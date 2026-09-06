@@ -16,12 +16,13 @@ actual fun FullscreenEffect(
   enabled: Boolean,
   lockLandscape: Boolean,
   exitToPortrait: Boolean,
+  forcePortrait: Boolean,
 ) {
   val view = LocalView.current
   val activity = view.context.findActivity() ?: return
   val window = activity.window
 
-  DisposableEffect(view, window, enabled, lockLandscape, exitToPortrait) {
+  DisposableEffect(view, window, enabled, lockLandscape, exitToPortrait, forcePortrait) {
     val controller = WindowCompat.getInsetsController(window, view)
     val prevBehavior = controller.systemBarsBehavior
     // 记录进入前的方向以便退出时还原。若拿到的是横屏值（例如上一个效果异常结束留下的），
@@ -32,7 +33,12 @@ actual fun FullscreenEffect(
       ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
-    if (enabled) {
+    if (forcePortrait) {
+      // 强制竖屏：未开启「默认横屏」且进房时设备处于横屏（平板等）时，
+      // 直接锁定竖屏，不跟随系统方向；系统栏保持显示（普通竖屏播放器样式）。
+      controller.show(WindowInsetsCompat.Type.systemBars())
+      activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    } else if (enabled) {
       controller.hide(WindowInsetsCompat.Type.systemBars())
       // Some devices ignore hide() during rotation/layout. Post a second attempt.
       view.post { controller.hide(WindowInsetsCompat.Type.systemBars()) }
