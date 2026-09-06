@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -37,9 +39,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,42 +67,45 @@ fun PlatformInlineSearch(
   var query by remember { mutableStateOf("") }
   var results by remember(appState.selectedPlatform) { mutableStateOf(emptyList<Streamer>()) }
   var searching by remember(appState.selectedPlatform) { mutableStateOf(false) }
-  // 输入框是否持有焦点：面板不可抢焦点，因此只有点到别处才会丢焦点；
-  // 丢焦点后延迟一小段时间再收起面板——既保证点空白能自动收起，
-  // 又不会在「点击联想结果」的输入手势中途把面板撤掉（否则点击会丢失）。
-  var fieldFocused by remember { mutableStateOf(false) }
+  // 结果面板是否展开。展开/收起只由「有无输入内容」与「点按外部」驱动，
+  // 不再与输入框焦点联动——焦点丢失时绝不清空 query、绝不收起输入法，
+  // 彻底杜绝打字过程中输入被清、输入法弹窗消失的问题。
+  var panelOpen by remember(appState.selectedPlatform) { mutableStateOf(false) }
+  // 输入法「搜索」键的触发计数：+1 表示用户已输入完成，要求立即搜索（跳过停顿等待）
+  var searchTick by remember { mutableStateOf(0) }
+  var consumedTick by remember { mutableStateOf(0) }
   val platform = appState.selectedPlatform
   val focusManager = LocalFocusManager.current
 
-  LaunchedEffect(platform, query) {
+  LaunchedEffect(platform, query, searchTick) {
     val trimmed = query.trim()
     if (trimmed.isEmpty()) {
       results = emptyList()
       searching = false
+      panelOpen = false
       return@LaunchedEffect
     }
+    panelOpen = true
+    // 去掉逐键联想：输入停顿（约 0.6s）视为「一次输入完成」后自动搜一次；
+    // 按输入法搜索键则跳过等待立即搜。
+    val immediate = searchTick != consumedTick
+    if (immediate) consumedTick = searchTick else delay(600)
     searching = true
-    delay(220)
     results = runCatching { appState.repo.searchAnchors(platform = platform, keyword = trimmed) }
       .getOrDefault(emptyList())
     searching = false
   }
 
-  fun closePanel() {
+  // 收起面板。clearFocus=false 时保持输入框焦点与输入法弹窗（如点「×」清空重输）。
+  fun closePanel(clearFocus: Boolean) {
     query = ""
-    focusManager.clearFocus()
+    panelOpen = false
+    if (clearFocus) focusManager.clearFocus()
   }
 
-  // 联想面板不可获焦（fix 输入丢字符），系统返回键无法自动收起它，
+  // 面板不可获焦（不抢输入法），系统返回键无法自动收起它，
   // 这里显式接管：面板展开时按返回键先收面板，不直接退出当前页。
-  PlatformBackHandler(enabled = query.isNotBlank()) { closePanel() }
-
-  // 焦点丢失（点到别处）后延迟收起：见 fieldFocused 注释
-  LaunchedEffect(fieldFocused, query) {
-    if (fieldFocused || query.isBlank()) return@LaunchedEffect
-    delay(250)
-    closePanel()
-  }
+  PlatformBackHandler(enabled = query.isNotBlank()) { closePanel(clearFocus = true) }
 
   Box(modifier = modifier) {
     // 毛玻璃质感：半透明底 + 发丝描边。暗色下用白色高光描边模拟玻璃边缘反光。
@@ -139,11 +144,10 @@ fun PlatformInlineSearch(
           onValueChange = { query = it },
           modifier = Modifier
             .weight(1f)
-            .height(44.dp)
-            // 联想面板不可获取焦点（focusable = false），输入框始终保持焦点，
-            // 输入第一个字符后输入法不会被抢走、后续字符也不会丢。
-            .onFocusChanged { state -> fieldFocused = state.isFocused },
+            .height(44.dp),
           singleLine = true,
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+          keyboardActions = KeyboardActions(onSearch = { searchTick++ }),
           textStyle = MaterialTheme.typography.bodyMedium.copy(
             color = MaterialTheme.colorScheme.onSurface,
           ),
@@ -169,7 +173,7 @@ fun PlatformInlineSearch(
             modifier = Modifier
               .size(36.dp)
               .clip(CircleShape)
-              .clickable { closePanel() }
+              .clickable { closePanel(clearFocus = false) }
               .padding(8.dp),
           )
         }
@@ -177,13 +181,15 @@ fun PlatformInlineSearch(
     }
 
     RoundedDropdownMenu(
-      expanded = query.trim().isNotEmpty(),
-      onDismissRequest = { closePanel() },
+      expanded = panelOpen && query.trim().isNotEmpty(),
+      // 点按外部（面板不可获焦，外部点击会穿透到底层 UI 同时触发这里）：
+      // 只收面板，绝不清空输入、绝不动输入法
+      onDismissRequest = { panelOpen = false },
       offsetY = 50.dp,
       width = 320.dp,
       maxHeight = 420.dp,
-      // 关键：联想面板不能抢焦点，否则输入第一个字符后焦点被 Popup 夺走，
-      // 输入法自动收起且后续字符全部丢失（例如连打两个 y 只进一个）。
+      // 关键：结果面板不能抢焦点，否则输入第一个字符后焦点被 Popup 夺走，
+      // 输入法自动收起且后续字符全部丢失。
       focusable = false,
     ) {
       when {
@@ -217,7 +223,7 @@ fun PlatformInlineSearch(
               modifier = Modifier
                 .fillMaxWidth()
                 .clickable {
-                  closePanel()
+                  closePanel(clearFocus = true)
                   appState.openPlayer(streamer)
                 }
                 .padding(horizontal = 12.dp, vertical = 6.dp),

@@ -240,7 +240,7 @@ class AndroidUpdateManager(
   /**
    * 在系统「Download」公共目录为指定版本创建安装包写入目标。
    * - API 29+ 走 MediaStore.Downloads（作用域存储正确姿势，文件对用户可见）；
-   * - API < 29 走 Environment.getExternalStoragePublicDirectory + FileProvider。
+   * - API < 29 走应用专属外部目录（getExternalFilesDir）+ FileProvider，无需存储权限。
    * 返回可直接写入的 OutputStream 以及用于安装的 content:// Uri。
    */
   private fun createDownloadTarget(versionName: String): DownloadTarget? {
@@ -273,7 +273,13 @@ class AndroidUpdateManager(
       val out = resolver.openOutputStream(uri) ?: return null
       DownloadTarget(uri, out)
     } else {
-      val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+      // API 23~28：写公共 Download 目录需要 WRITE_EXTERNAL_STORAGE 运行时权限，
+      // 应用从未申请该权限，直接写会 Permission denied（安卓 7 平板实测）。
+      // 改写应用专属外部目录（Android/data/<pkg>/files/Download）：任何系统版本都
+      // 无需存储权限；安装走 FileProvider（file_paths.xml 已含 external-files-path）。
+      val dir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        ?: appContext.getExternalFilesDir(null)
+        ?: return null
       if (!dir.exists()) dir.mkdirs()
       val file = File(dir, filename)
       if (file.exists()) file.delete()
@@ -318,6 +324,15 @@ class AndroidUpdateManager(
           }
         }
       }
+      // API < 29：安装包在应用专属目录里，按文件名比对版本后清理
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        val dir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        dir?.listFiles { f -> f.name.startsWith(APK_PREFIX) && f.name.endsWith(APK_SUFFIX) }
+          ?.forEach { f ->
+            val ver = f.name.removePrefix(APK_PREFIX).removeSuffix(APK_SUFFIX)
+            if (compareVersion(ver, currentVersionName) <= 0) f.delete()
+          }
+      }
     }
   }
 
@@ -343,10 +358,10 @@ class AndroidUpdateManager(
           resolver.delete(ContentUris.withAppendedId(collection, id), null, null)
         }
       }
-      // API < 29：公共 Downloads 目录里的真实文件可能不在 MediaStore 索引里，直接按文件名清理
+      // API < 29：安装包缓存在应用专属目录里（不在 MediaStore 索引），直接按文件名清理
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        dir.listFiles { f -> f.name.startsWith(APK_PREFIX) && f.name.endsWith(APK_SUFFIX) }
+        val dir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        dir?.listFiles { f -> f.name.startsWith(APK_PREFIX) && f.name.endsWith(APK_SUFFIX) }
           ?.forEach { it.delete() }
       }
     }

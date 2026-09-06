@@ -367,11 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.6"
+private const val LAST_RELEASE_VERSION = "0.2.7"
 private val LAST_RELEASE_NOTES = listOf(
-  "横屏播放设置面板改为实心深色底，选项清晰可读",
-  "分类较多的平台分类收纳进顶栏下拉菜单，新增推荐入口",
-  "背景渐变绘制缓存，滚动与切页更省资源",
+  "搜索框输入丢字符与输入法自动收起问题修复",
+  "平板未开启默认横屏时一律竖屏进入直播间",
+  "开启默认横屏后退出一次即回竖屏",
 ).joinToString("\n") { "· $it" }
 
 @Composable
@@ -616,7 +616,7 @@ private fun UpdateCheckerCard(
             }
           }
           is UpdateState.Downloaded -> {
-            UpdateStatusText(text = "安装包已缓存到 Download 目录，点击即可安装", positive = true)
+            UpdateStatusText(text = "安装包已下载，点击即可安装", positive = true)
             Button(onClick = { updateManager.install(state.fileUri) }) {
               Icon(imageVector = Icons.Default.Download, contentDescription = null)
               Spacer(modifier = Modifier.width(6.dp))

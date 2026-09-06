@@ -44,6 +44,7 @@ import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.hazeChild
 import dtv.mobile.model.Platform
 import dtv.mobile.state.Screen
+import dtv.mobile.ui.system.rememberGlassSupported
 
 /** 底栏浮岛在屏幕上占据的净高度（不含导航条），列表 contentPadding 用它预留空间。 */
 val DockContentClearance = 96.dp
@@ -68,6 +69,15 @@ fun PlatformBottomBar(
     Color(0xFFF6F7FB).copy(alpha = 0.60f)
   }
   val glassStyle = HazeStyle(tint = glassTint, blurRadius = 24.dp, noiseFactor = 0.06f)
+  // 安卓 12 以下没有 RenderEffect，haze 不会模糊，半透明 tint 会直接透出滚动内容
+  // （底栏文字与背景混在一起，用户实测样式异常）。此时退回高不透明度实色底，
+  // 观感接近毛玻璃但完全保证可读性。
+  val glassSupported = rememberGlassSupported()
+  val glassFallbackColor = if (isDark) {
+    Color(0xFF1C1C22).copy(alpha = 0.96f)
+  } else {
+    Color(0xFFF6F7FB).copy(alpha = 0.96f)
+  }
   val dockShape = RoundedCornerShape(percent = 50)
   // 描边要能明确看出是「一块玻璃」：浅色模式用高亮白边（靠阴影与背景拉开层次），
   // 深色模式用偏白的亮边勾出玻璃轮廓，比原来的暗色描边明显得多。
@@ -94,7 +104,13 @@ fun PlatformBottomBar(
       modifier = Modifier
         .fillMaxWidth()
         .shadow(elevation = if (isDark) 10.dp else 16.dp, shape = dockShape, clip = false)
-        .hazeChild(hazeState, shape = dockShape, style = glassStyle)
+        .then(
+          if (glassSupported) {
+            Modifier.hazeChild(hazeState, shape = dockShape, style = glassStyle)
+          } else {
+            Modifier.background(color = glassFallbackColor, shape = dockShape)
+          },
+        )
         .background(brush = glassHighlight, shape = dockShape)
         .border(BorderStroke(1.6.dp, borderColor), dockShape)
         .padding(vertical = 4.dp),

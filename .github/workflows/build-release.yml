@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # 应用版本号（需与 androidApp/build.gradle.kts 的 versionName 保持一致）
-      APP_VERSION: "0.2.7"
+      APP_VERSION: "0.2.8"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
