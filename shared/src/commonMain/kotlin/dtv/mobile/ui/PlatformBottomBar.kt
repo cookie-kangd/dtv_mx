@@ -125,7 +125,7 @@ fun PlatformBottomBar(
             Platform.Huya -> Icons.Default.Pets
             Platform.Douyin -> Icons.Default.MusicNote
             Platform.Bilibili -> Icons.Default.LiveTv
-            Platform.Twitch -> Icons.Default.SportsEsports
+            Platform.Twitch -> Icons.Default.VideogameAsset
             Platform.Custom -> Icons.Default.Home
           }
           Icon(
