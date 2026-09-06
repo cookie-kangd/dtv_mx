@@ -367,11 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.4"
+private const val LAST_RELEASE_VERSION = "0.2.5"
 private val LAST_RELEASE_NOTES = listOf(
-  "卡片按压缩放反馈，触感更清晰",
-  "日志异步落盘，直播更流畅更省电",
-  "网格卡片封面解析复用，滚动更顺",
+  "横屏播放设置面板可读性优化",
+  "平台排序支持查看全部平台（含已关闭）",
+  "分类胶囊按压缩放反馈",
 ).joinToString("\n") { "· $it" }
 
 @Composable

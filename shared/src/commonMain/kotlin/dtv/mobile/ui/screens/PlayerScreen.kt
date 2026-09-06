@@ -101,10 +101,7 @@ import dtv.mobile.state.VideoQuality
 import dtv.mobile.theme.DtvColors
 import dtv.mobile.ui.DockContentClearance
 import dtv.mobile.ui.components.DtvCardDefaults
-import dtv.mobile.ui.components.LocalGlassHaze
 import dtv.mobile.ui.components.NetworkImage
-import dev.chrisbanes.haze.HazeStyle
-import dev.chrisbanes.haze.hazeChild
 import dtv.mobile.ui.player.PictureInPicture
 import dtv.mobile.ui.player.StreamPlayer
 import dtv.mobile.ui.system.FullscreenEffect
@@ -1482,58 +1479,36 @@ private fun PlayerSettingsDrawer(
       exit = slideOutHorizontally(animationSpec = tween(durationMillis = 220)) { -it } + fadeOut(animationSpec = tween(durationMillis = 140)),
       label = "settings_drawer",
     ) {
-      // 横屏设置抽屉：毛玻璃浮岛。背后是 RootScaffold 根部
-      // 暴露的 HazeState（播放画面被实时模糊透出），视频上玻璃质感明显。
-      // v0.2.5 修复：此前 tint 只有 0.52，播放画面（尤其亮场）透过玻璃后
-      // 选项文字对比度不足「看不清」；加深底色到 0.82、blur 收到 18dp、
-      // 高光渐变减弱——保留玻璃质感的同时保证文字清晰可读。
-      // 未提供 HazeState 或低版本系统（API < 31，haze 自动降级）时退回
-      // 原来的半透明黑面板，观感与行为不变。
-      val glassHaze = LocalGlassHaze.current
+      // 横屏设置抽屉：v0.2.6 按用户要求取消毛玻璃——播放画面透出玻璃后
+      // 选项文字对比度始终不足（v0.2.5 调深 tint 仍看不清），改回不透明
+      // 深色面板，可读性第一。固定不透明度让所有设备/画面下表现一致。
       val drawerShape = RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp)
-      val drawerModifier = if (glassHaze != null) {
-        Modifier
-          .fillMaxHeight()
-          .fillMaxWidth(0.78f)
-          .widthIn(max = 320.dp)
-          .hazeChild(
-            glassHaze,
-            shape = drawerShape,
-            style = HazeStyle(
-              tint = Color(0xFF14161C).copy(alpha = 0.82f),
-              blurRadius = 18.dp,
-              noiseFactor = 0.06f,
-            ),
-          )
-      } else {
-        Modifier
-          .fillMaxHeight()
-          .fillMaxWidth(0.78f)
-          .widthIn(max = 320.dp)
-      }
+      val drawerModifier = Modifier
+        .fillMaxHeight()
+        .fillMaxWidth(0.78f)
+        .widthIn(max = 320.dp)
       Surface(
         modifier = drawerModifier,
         shape = drawerShape,
-        color = if (glassHaze != null) Color.Transparent else Color.Black.copy(alpha = 0.72f),
+        color = Color(0xFF14161C),
         contentColor = DtvColors.NightTextPrimary,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = if (glassHaze != null) 0.18f else 0.10f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
         tonalElevation = 0.dp,
         shadowElevation = 6.dp,
       ) {
         Box(
           modifier = Modifier
             .fillMaxSize()
+            // 极淡的纵向明暗渐变：给实心面板一点层次，底色仍接近不透明深色，
+            // 任何画面下选项文字都保持高对比可读。
             .background(
-              // 玻璃高光：与底栏浮岛同款自上而下白色渐变（减弱后不影响顶部文字可读性）
               brush = Brush.verticalGradient(
                 colors = listOf(
-                  Color.White.copy(alpha = 0.07f),
-                  Color.White.copy(alpha = 0.02f),
-                  Color.Transparent,
+                  Color(0xFF191C25),
+                  Color(0xFF12141B),
                 ),
               ),
-            )
-            .then(if (glassHaze == null) Modifier.background(Color.Black.copy(alpha = 0.10f)) else Modifier),
+            ),
         ) {
           MaterialTheme(colorScheme = nightScheme) {
             content()
