@@ -78,6 +78,9 @@ object CrashFileLogger {
       append('\n')
     }
 
+    // 日志已改异步落盘：崩溃瞬间先把队列里已产生的日志刷进文件，
+    // 否则崩溃前最后几百毫秒的关键日志会丢失（异步化的代价必须在这里补回）。
+    runCatching { AppLog.flushSync() }
     file.writer().use { out ->
       out.write(header)
       out.write(stackTraceToString(throwable))

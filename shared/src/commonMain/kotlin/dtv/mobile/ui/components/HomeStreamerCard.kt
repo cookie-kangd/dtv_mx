@@ -1,8 +1,11 @@
 package dtv.mobile.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,12 +28,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,10 +68,16 @@ fun HomeStreamerCard(
   val offline = !streamer.isLive
   val offlineOverlay = DtvCardDefaults.offlineOverlayColor
 
+  // 按压缩放反馈：与平台页网格卡片一致的手感（仅在按压瞬间有动画，空闲零开销）
+  val interactionSource = remember { MutableInteractionSource() }
+  val pressed by interactionSource.collectIsPressedAsState()
+  val pressScale by animateFloatAsState(if (pressed) 0.97f else 1f, label = "homeCardPressScale")
+
   Column(
     modifier = modifier
       .fillMaxWidth()
-      .clickable(onClick = onClick),
+      .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+      .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
     verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp),
   ) {
     Box(modifier = Modifier.fillMaxWidth()) {

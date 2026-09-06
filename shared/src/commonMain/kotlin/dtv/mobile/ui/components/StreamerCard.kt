@@ -1,8 +1,11 @@
 package dtv.mobile.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,10 +26,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,17 +53,26 @@ fun StreamerCard(
   val metrics = LocalCardMetrics.current
   val shape = RoundedCornerShape(metrics.cornerRadius)
   val coverRatio = metrics.coverRatio
-  val cover = normalizeHttpUrl(streamer.coverUrl) ?: normalizeHttpUrl(streamer.avatarUrl)
+  // URL 归一化按输入记忆：网格滚动/切换画质等重组时不再重复做正则解析（与首页卡片一致）
+  val cover = remember(streamer.coverUrl, streamer.avatarUrl) {
+    normalizeHttpUrl(streamer.coverUrl) ?: normalizeHttpUrl(streamer.avatarUrl)
+  }
   val offline = !streamer.isLive
   val isDark = DtvCardDefaults.isDarkTheme()
   val cardColor = DtvCardDefaults.gridCardColor(isDark)
   val borderColor = DtvCardDefaults.cardBorderColor(isDark)
 
+  // 按压缩放反馈：按下时轻微缩小，松开回弹（仅在按压瞬间有动画，空闲零开销）
+  val interactionSource = remember { MutableInteractionSource() }
+  val pressed by interactionSource.collectIsPressedAsState()
+  val pressScale by animateFloatAsState(if (pressed) 0.97f else 1f, label = "cardPressScale")
+
   Surface(
     modifier = modifier
       .fillMaxWidth()
+      .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
       .clip(shape)
-      .clickable(onClick = onClick),
+      .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
     shape = shape,
     color = cardColor,
     tonalElevation = 0.dp,
@@ -167,7 +182,7 @@ fun StreamerCard(
         )
 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.infoSpacing)) {
-          val avatar = normalizeHttpUrl(streamer.avatarUrl)
+          val avatar = remember(streamer.avatarUrl) { normalizeHttpUrl(streamer.avatarUrl) }
           Box(
             modifier = Modifier
               .size(metrics.avatarSize)

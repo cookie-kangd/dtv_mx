@@ -367,11 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.2"
+private const val LAST_RELEASE_VERSION = "0.2.3"
 private val LAST_RELEASE_NOTES = listOf(
-  "安装门槛降至 Android 7.0，更多老设备可用",
-  "全局图片缓存：封面秒开，切页与来回滚动不再重复下载",
-  "已关注图标统一玫红；移除未用静态资源",
+  "Twitch 平台完整接入（列表/分类/搜索/多画质/弹幕）",
+  "播放器横屏设置抽屉升级真毛玻璃；下拉菜单模拟玻璃质感",
+  "图片加载与卡片封面渲染性能优化，滚动更流畅",
 ).joinToString("\n") { "· $it" }
 
 @Composable
@@ -903,7 +903,7 @@ private fun PlatformSettingsSection(
       Text("平台启用", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
       Spacer(modifier = Modifier.height(2.dp))
       Text(
-        text = "默认全部开启。关闭后该平台会立即从下方切换栏移除，重新开启后自动加回。",
+        text = "Twitch 默认关闭（需在下方手动开启），其余平台默认开启。关闭后该平台会立即从切换栏移除，重新开启后自动加回。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
       )
