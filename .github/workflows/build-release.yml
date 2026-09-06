@@ -1,8 +1,12 @@
 name: Build Android APK & Release
 
 on:
+  # 只由 v* 标签触发构建发版。
+  # 注意不要再加 branches 触发：发版流程是「同一批改动既推 main 提交、又推 v* 标签」，
+  # 若两个都开，main 与 tag 会各触发一次 CI，其中 main 那次完整构建完 APK 却
+  # 被 Create Release 的 tag 条件拦住直接丢弃，纯浪费约 5 分钟构建时间。
+  # 无标签的 main 提交需要手动构建时，用 workflow_dispatch 手动触发。
   push:
-    branches: [ main, master ]
     tags: [ 'v*' ]
   workflow_dispatch:
 
