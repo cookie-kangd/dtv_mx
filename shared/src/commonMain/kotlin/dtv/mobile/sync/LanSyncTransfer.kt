@@ -60,6 +60,7 @@ private fun platformFromDesktop(value: String): Platform? {
     "DOUYIN" -> Platform.Douyin
     "HUYA" -> Platform.Huya
     "BILIBILI" -> Platform.Bilibili
+    "TWITCH" -> Platform.Twitch
     else -> null
   }
 }

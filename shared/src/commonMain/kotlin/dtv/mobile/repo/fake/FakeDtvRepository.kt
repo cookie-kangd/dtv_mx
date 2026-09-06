@@ -166,6 +166,40 @@ class FakeDtvRepository : DtvRepository {
 
   override suspend fun clearBilibiliCookie() {}
 
+  override suspend fun fetchTwitchCategories(): List<dtv.mobile.repo.TwitchCate> {
+    return listOf(
+      dtv.mobile.repo.TwitchCate(id = "just-chatting", name = "Just Chatting"),
+      dtv.mobile.repo.TwitchCate(id = "counter-strike", name = "Counter-Strike"),
+    )
+  }
+
+  override suspend fun fetchTwitchLiveList(gameSlug: String?, cursor: String?, limit: Int): dtv.mobile.repo.TwitchPage {
+    return dtv.mobile.repo.TwitchPage(
+      items = fakeRooms(platform = Platform.Twitch, start = 0, count = limit),
+      cursor = null,
+      hasMore = false,
+    )
+  }
+
+  override suspend fun searchTwitchChannels(keyword: String): List<Streamer> {
+    return emptyList()
+  }
+
+  override suspend fun fetchTwitchPlayInfo(login: String): dtv.mobile.repo.TwitchPlayInfo {
+    return dtv.mobile.repo.TwitchPlayInfo(
+      variants = listOf(
+        dtv.mobile.repo.TwitchVariant(name = "chunked", display = "原画", url = "https://example.invalid/twitch/$login/chunked.m3u8"),
+        dtv.mobile.repo.TwitchVariant(name = "720p60", display = "720P60", url = "https://example.invalid/twitch/$login/720p60.m3u8"),
+      ),
+    )
+  }
+
+  override suspend fun resolveTwitchStreamUrl(login: String, quality: String?): String {
+    return "https://example.invalid/twitch/$login/master.m3u8"
+  }
+
+  override fun observeTwitchDanmaku(login: String): Flow<DanmakuMessage> = emptyFlow()
+
   private fun fakeRooms(platform: Platform, start: Int, count: Int): List<Streamer> {
     val titles = listOf(
       "深夜高能整活，来就对了",

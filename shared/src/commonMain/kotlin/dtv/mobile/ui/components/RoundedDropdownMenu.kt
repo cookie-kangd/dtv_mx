@@ -1,6 +1,7 @@
 package dtv.mobile.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -16,6 +17,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -57,13 +60,24 @@ fun RoundedDropdownMenu(
         if (width != null) Modifier.width(width) else Modifier.widthIn(min = 132.dp),
       ),
       shape = RoundedCornerShape(16.dp),
-      color = MaterialTheme.colorScheme.surface,
+      // 毛玻璃质感：Popup 是独立窗口拿不到 haze 实时模糊，用「半透明底 +
+      // 玻璃高光渐变 + 亮描边」模拟玻璃面板，与底栏浮岛观感一致。
+      color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
       tonalElevation = 0.dp,
       shadowElevation = 8.dp,
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)),
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)),
     ) {
       Column(
         modifier = Modifier
+          .background(
+            brush = Brush.verticalGradient(
+              colors = listOf(
+                Color.White.copy(alpha = 0.10f),
+                Color.White.copy(alpha = 0.03f),
+                Color.Transparent,
+              ),
+            ),
+          )
           .padding(vertical = 6.dp)
           .then(
             if (maxHeight != null) {

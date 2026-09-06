@@ -26,6 +26,7 @@ import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +59,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
+import dtv.mobile.ui.components.LocalGlassHaze
 import dtv.mobile.ui.components.RoundedDropdownMenu
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.haze
@@ -128,7 +130,8 @@ fun RootScaffold(appState: AppState) {
     // 使浮岛能对其背后的滚动内容做实时模糊（毛玻璃）。
     val showDock = !(appState.currentScreen == Screen.Player && appState.playerFullscreen)
     val hazeState = remember { HazeState() }
-    Box(modifier = Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
+    CompositionLocalProvider(LocalGlassHaze provides hazeState) {
+      Box(modifier = Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
       AnimatedContent(
         targetState = appState.currentScreen,
         transitionSpec = {
@@ -178,6 +181,7 @@ fun RootScaffold(appState: AppState) {
             platforms = appState.visiblePlatforms,
           )
         }
+      }
       }
     }
   }
@@ -238,21 +242,21 @@ private fun HubTopBar(
         if (categoryMenu != null) {
           Box {
             // 与搜索框同规格（高 44dp 胶囊），背景始终为全局高亮色。
-            // 宽度按「4 个汉字 + 图标」定死（108dp：文字区 66dp > 4×14sp=56dp），
+            // 宽度按「4 个汉字 + 图标」定死（90dp：文字区 58dp > 4×14sp=56dp），
             // 板块名最长 4 个字必然完整显示，不会出现省略号；同时保证 4 个平台
             // 顶栏的搜索框长度完全一致。去掉平台名后搜索框吃到整行剩余宽度。
             val menu = categoryMenu
             val currentSection = menu.options.getOrNull(menu.selectedIndex).takeIf { menu.selectedIndex >= 0 }
             Surface(
               onClick = { categoryMenuExpanded = !categoryMenuExpanded },
-              modifier = Modifier.height(44.dp).width(108.dp),
+              modifier = Modifier.height(44.dp).width(90.dp),
               shape = RoundedCornerShape(999.dp),
               color = MaterialTheme.colorScheme.primary,
               tonalElevation = 0.dp,
               shadowElevation = 0.dp,
             ) {
               Row(
-                modifier = Modifier.padding(start = 14.dp, end = 6.dp),
+                modifier = Modifier.padding(start = 10.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
               ) {
@@ -269,7 +273,7 @@ private fun HubTopBar(
                   imageVector = Icons.Default.ArrowDropDown,
                   contentDescription = "选择板块",
                   tint = MaterialTheme.colorScheme.onPrimary,
-                  modifier = Modifier.size(22.dp),
+                  modifier = Modifier.size(18.dp),
                 )
               }
             }

@@ -95,12 +95,16 @@ import dtv.mobile.repo.DanmakuMessage
 import dtv.mobile.repo.DouyuPlayInfo
 import dtv.mobile.repo.DouyuPlayVariant
 import dtv.mobile.repo.DtvRepository
+import dtv.mobile.repo.TwitchPlayInfo
 import dtv.mobile.state.AppState
 import dtv.mobile.state.VideoQuality
 import dtv.mobile.theme.DtvColors
 import dtv.mobile.ui.DockContentClearance
 import dtv.mobile.ui.components.DtvCardDefaults
+import dtv.mobile.ui.components.LocalGlassHaze
 import dtv.mobile.ui.components.NetworkImage
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.hazeChild
 import dtv.mobile.ui.player.PictureInPicture
 import dtv.mobile.ui.player.StreamPlayer
 import dtv.mobile.ui.system.FullscreenEffect
@@ -150,6 +154,8 @@ fun PlayerScreen(
   var selectedDouyuCdn by remember(streamer?.roomId) { mutableStateOf<String?>(null) }
   var selectedDouyinQuality by remember(streamer?.roomId) { mutableStateOf<String?>(null) }
   var selectedBilibiliQn by remember(streamer?.roomId) { mutableStateOf<Int?>(null) }
+  var selectedTwitchQuality by remember(streamer?.roomId) { mutableStateOf<String?>(null) }
+  var twitchInfo by remember(streamer?.roomId) { mutableStateOf<TwitchPlayInfo?>(null) }
   var showSettings by remember(streamer?.roomId) { mutableStateOf(false) }
 
   var danmakuEnabled by remember(streamer?.roomId) { mutableStateOf(true) }
@@ -276,6 +282,8 @@ fun PlayerScreen(
     selectedDouyuCdn = null
     selectedDouyinQuality = null
     selectedBilibiliQn = null
+    selectedTwitchQuality = null
+    twitchInfo = null
     when (s.platform) {
       Platform.Douyu -> {
         // 初始画质跟随「设置-基本设置-画质」：映射为斗鱼解析器能识别的语义档位名
@@ -345,6 +353,23 @@ fun PlayerScreen(
           url = resolvedUrl
         }.onFailure { error = it.message ?: "获取B站播放地址失败" }
       }
+      Platform.Twitch -> {
+        // 默认 quality=null -> 返回 master m3u8，交给 ExoPlayer 自动码率适配（ABR），
+        // 起播最快且不会因「设置里挑的档位该频道没有」而回退错档。
+        runCatching { appState.repo.resolveTwitchStreamUrl(login = s.roomId, quality = null) }
+          .onSuccess { resolvedUrl ->
+            url = resolvedUrl
+            // 异步拉画质列表，仅用于设置面板展示
+            scope.launch {
+              runCatching { appState.repo.fetchTwitchPlayInfo(login = s.roomId) }
+                .onSuccess { info ->
+                  if (currentRoomId.value != s.roomId) return@onSuccess
+                  twitchInfo = info
+                }
+            }
+          }
+          .onFailure { error = it.message ?: "获取Twitch播放地址失败" }
+      }
       else -> {
         error = "暂不支持的平台：${s.platform.title}"
       }
@@ -374,6 +399,7 @@ fun PlayerScreen(
       Platform.Huya -> appState.repo.observeHuyaDanmaku(s.roomId)
       Platform.Douyin -> appState.repo.observeDouyinDanmaku(s.roomId)
       Platform.Bilibili -> appState.repo.observeBilibiliDanmaku(s.roomId)
+      Platform.Twitch -> appState.repo.observeTwitchDanmaku(s.roomId)
       else -> null
     } ?: return@LaunchedEffect
 
@@ -443,6 +469,7 @@ fun PlayerScreen(
         Platform.Huya -> runCatching { appState.repo.resolveHuyaStreamUrl(roomId = s.roomId) }
         Platform.Douyin -> runCatching { appState.repo.resolveDouyinStreamUrl(webRid = s.roomId, desiredQuality = selectedDouyinQuality) }
         Platform.Bilibili -> runCatching { appState.repo.resolveBilibiliStreamUrl(roomId = s.roomId, qn = selectedBilibiliQn) }
+        Platform.Twitch -> runCatching { appState.repo.resolveTwitchStreamUrl(login = s.roomId, quality = selectedTwitchQuality) }
         else -> Result.failure(IllegalStateException("暂不支持的平台：${s.platform.title}"))
       }
       // 解析期间若已切到别的直播间，这份结果作废，交给新房间的解析流程赋值
@@ -507,7 +534,7 @@ fun PlayerScreen(
       ) {
         Text("播放设置", style = MaterialTheme.typography.titleMedium)
 
-        if (s.platform == Platform.Douyu || s.platform == Platform.Douyin || s.platform == Platform.Bilibili) {
+        if (s.platform == Platform.Douyu || s.platform == Platform.Douyin || s.platform == Platform.Bilibili || s.platform == Platform.Twitch) {
           Text("画质", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f))
           when (s.platform) {
             Platform.Douyu -> {
@@ -547,6 +574,17 @@ fun PlayerScreen(
                 selected = selectedBilibiliQn,
                 onSelect = {
                   selectedBilibiliQn = it
+                  reloadUrl()
+                },
+              )
+            }
+            Platform.Twitch -> {
+              // 「自动」= master m3u8 交给播放器 ABR；其余为 usher 返回的固定档位
+              RowWrap(
+                items = listOf("自动" to null) + twitchInfo?.variants.orEmpty().map { it.name to it.name },
+                selected = selectedTwitchQuality,
+                onSelect = {
+                  selectedTwitchQuality = it
                   reloadUrl()
                 },
               )
@@ -1444,22 +1482,55 @@ private fun PlayerSettingsDrawer(
       exit = slideOutHorizontally(animationSpec = tween(durationMillis = 220)) { -it } + fadeOut(animationSpec = tween(durationMillis = 140)),
       label = "settings_drawer",
     ) {
-      Surface(
-        modifier = Modifier
+      // 横屏设置抽屉：升级为真·毛玻璃浮岛。背后是 RootScaffold 根部
+      // 暴露的 HazeState（播放画面被实时模糊透出），视频上玻璃质感明显；
+      // 未提供 HazeState 或低版本系统（API < 31，haze 自动降级）时退回
+      // 原来的半透明黑面板，观感与行为不变。
+      val glassHaze = LocalGlassHaze.current
+      val drawerShape = RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp)
+      val drawerModifier = if (glassHaze != null) {
+        Modifier
           .fillMaxHeight()
           .fillMaxWidth(0.78f)
-          .widthIn(max = 320.dp),
-        shape = RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp),
-        color = Color.Black.copy(alpha = 0.72f),
+          .widthIn(max = 320.dp)
+          .hazeChild(
+            glassHaze,
+            shape = drawerShape,
+            style = HazeStyle(
+              tint = Color(0xFF14161C).copy(alpha = 0.52f),
+              blurRadius = 24.dp,
+              noiseFactor = 0.06f,
+            ),
+          )
+      } else {
+        Modifier
+          .fillMaxHeight()
+          .fillMaxWidth(0.78f)
+          .widthIn(max = 320.dp)
+      }
+      Surface(
+        modifier = drawerModifier,
+        shape = drawerShape,
+        color = if (glassHaze != null) Color.Transparent else Color.Black.copy(alpha = 0.72f),
         contentColor = DtvColors.NightTextPrimary,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = if (glassHaze != null) 0.18f else 0.10f)),
         tonalElevation = 0.dp,
         shadowElevation = 6.dp,
       ) {
         Box(
           modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.10f)),
+            .background(
+              // 玻璃高光：与底栏浮岛同款自上而下白色渐变，是毛玻璃质感的关键
+              brush = Brush.verticalGradient(
+                colors = listOf(
+                  Color.White.copy(alpha = 0.12f),
+                  Color.White.copy(alpha = 0.04f),
+                  Color.Transparent,
+                ),
+              ),
+            )
+            .then(if (glassHaze == null) Modifier.background(Color.Black.copy(alpha = 0.10f)) else Modifier),
         ) {
           MaterialTheme(colorScheme = nightScheme) {
             content()

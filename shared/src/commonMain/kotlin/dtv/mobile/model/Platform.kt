@@ -9,5 +9,6 @@ enum class Platform(val title: String) {
   Huya("虎牙"),
   Douyin("抖音"),
   Bilibili("B站"),
+  Twitch("Twitch"),
 }
 

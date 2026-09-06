@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,8 +55,11 @@ fun HomeStreamerCard(
   val bg = DtvCardDefaults.homeCardColor(isDark)
   val border = DtvCardDefaults.cardBorderColor(isDark)
   val accent = MaterialTheme.colorScheme.primary
-  val cover = normalizeHttpUrl(streamer.coverUrl) ?: normalizeHttpUrl(streamer.avatarUrl)
-  val avatar = normalizeHttpUrl(streamer.avatarUrl)
+  // URL 归一化按输入记忆：卡片随列表滚动频繁重组时避免重复正则解析
+  val cover = remember(streamer.coverUrl, streamer.avatarUrl) {
+    normalizeHttpUrl(streamer.coverUrl) ?: normalizeHttpUrl(streamer.avatarUrl)
+  }
+  val avatar = remember(streamer.avatarUrl) { normalizeHttpUrl(streamer.avatarUrl) }
   val offline = !streamer.isLive
   val offlineOverlay = DtvCardDefaults.offlineOverlayColor
 

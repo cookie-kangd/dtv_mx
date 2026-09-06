@@ -156,9 +156,11 @@ class SubscriptionStoreAndroid(
     prefs.edit().putString("platform_order", raw).apply()
   }
 
-  // 被关闭的平台（按枚举名保存），默认全部开启
+  // 被关闭的平台（按枚举名保存）。从未保存过时默认关闭 Twitch（新平台需手动开启）；
+  // 用户在平台设置里操作过任意开关后会写入完整列表，此后以用户保存的为准。
   override fun loadPlatformDisabled(): List<String> {
-    val raw = prefs.getString("platform_disabled", null)?.takeIf { it.isNotBlank() } ?: return emptyList()
+    val raw = prefs.getString("platform_disabled", null)?.takeIf { it.isNotBlank() }
+      ?: return listOf(dtv.mobile.model.Platform.Twitch.name)
     return runCatching { json.decodeFromString(ListSerializer(String.serializer()), raw) }.getOrElse { emptyList() }
   }
 

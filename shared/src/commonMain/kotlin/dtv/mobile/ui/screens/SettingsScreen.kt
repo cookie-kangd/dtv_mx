@@ -367,11 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.1"
+private const val LAST_RELEASE_VERSION = "0.2.2"
 private val LAST_RELEASE_NOTES = listOf(
-  "顶栏更简洁：搜索框吃满整行，板块名完整显示不再省略",
-  "新增屏幕刷新率开关：高刷屏更流畅，关闭锁定 60Hz 更省电",
-  "封面 RGB_565 解码与弹幕图层平移，长列表与弹幕渲染更流畅",
+  "安装门槛降至 Android 7.0，更多老设备可用",
+  "全局图片缓存：封面秒开，切页与来回滚动不再重复下载",
+  "已关注图标统一玫红；移除未用静态资源",
 ).joinToString("\n") { "· $it" }
 
 @Composable
@@ -1198,7 +1198,7 @@ private fun BasicSettingsSection(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text("屏幕刷新率", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+          Text("屏幕高刷", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
           Text(
             text = "开启后使用系统最高刷新率（高刷屏 90/120/144Hz 生效，滑动与动画更流畅）；关闭则锁定 60Hz 标准刷新率，更省电。切换瞬间可能有一次轻微闪烁，属正常现象。",
             style = MaterialTheme.typography.bodySmall,

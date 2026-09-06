@@ -25,6 +25,8 @@ import dtv.mobile.platform.huya.HuyaDanmakuClientAndroid
 import dtv.mobile.platform.huya.HuyaLiveListApiAndroid
 import dtv.mobile.platform.huya.HuyaSearchApiAndroid
 import dtv.mobile.platform.huya.HuyaStreamUrlResolverAndroid
+import dtv.mobile.platform.twitch.TwitchApiAndroid
+import dtv.mobile.platform.twitch.TwitchDanmakuClientAndroid
 import dtv.mobile.repo.BilibiliCate1
 import dtv.mobile.repo.BilibiliCate2
 import dtv.mobile.repo.BilibiliQrCode
@@ -41,6 +43,9 @@ import dtv.mobile.repo.DanmakuMessage
 import dtv.mobile.repo.HuyaCate1
 import dtv.mobile.repo.HuyaCate2
 import dtv.mobile.repo.PagedResult
+import dtv.mobile.repo.TwitchCate
+import dtv.mobile.repo.TwitchPage
+import dtv.mobile.repo.TwitchPlayInfo
 import dtv.mobile.repo.fake.FakeDtvRepository
 import dtv.mobile.util.formatViewerCountWanIfNeeded
 import dtv.mobile.util.normalizeHttpUrl
@@ -93,6 +98,9 @@ class AndroidDtvRepository(
     cookieProvider = { bilibiliCookieStore.getCookie() },
   )
 
+  private val twitchApi = TwitchApiAndroid(client)
+  private val twitchDanmakuClient = TwitchDanmakuClientAndroid()
+
   private val fallback = FakeDtvRepository()
 
   private fun readAssetText(path: String): String {
@@ -130,6 +138,7 @@ class AndroidDtvRepository(
           ),
         )
       }.getOrElse { emptyList() }
+      Platform.Twitch -> runCatching { twitchApi.searchChannels(trimmed) }.getOrElse { emptyList() }
       else -> emptyList()
     }
   }
@@ -143,6 +152,9 @@ class AndroidDtvRepository(
         info.hlsPullUrlMap.isNotEmpty() || info.flvPullUrlMap.isNotEmpty()
       }.getOrNull()
       Platform.Bilibili -> runCatching { fetchBilibiliLiveStatus(streamer.roomId) }.getOrNull()
+      Platform.Twitch -> runCatching {
+        twitchApi.fetchUserSnapshot(streamer.roomId)?.isLive
+      }.getOrNull()
       else -> null
     }
   }
@@ -198,6 +210,18 @@ class AndroidDtvRepository(
           avatarUrl = normalizeHttpUrl(info.avatarUrl) ?: streamer.avatarUrl,
           coverUrl = normalizeHttpUrl(info.coverUrl) ?: streamer.coverUrl,
           isLive = isLive,
+        )
+      }.getOrNull()
+
+      Platform.Twitch -> runCatching {
+        val info = twitchApi.fetchUserSnapshot(roomId) ?: return@runCatching null
+        streamer.copy(
+          name = info.name,
+          title = info.title,
+          viewerText = info.viewerText.ifBlank { streamer.viewerText },
+          avatarUrl = info.avatarUrl ?: streamer.avatarUrl,
+          coverUrl = info.coverUrl ?: streamer.coverUrl,
+          isLive = info.isLive,
         )
       }.getOrNull()
 
@@ -734,5 +758,53 @@ class AndroidDtvRepository(
 
   override suspend fun clearBilibiliCookie() {
     bilibiliCookieStore.clear()
+  }
+
+  override suspend fun fetchTwitchCategories(): List<TwitchCate> {
+    return withContext(Dispatchers.IO) {
+      runCatching { twitchApi.fetchCategories() }
+        .onFailure { AppLog.e("DTV-Twitch", "fetch categories failed", it) }
+        .getOrDefault(emptyList())
+    }
+  }
+
+  override suspend fun fetchTwitchLiveList(gameSlug: String?, cursor: String?, limit: Int): TwitchPage {
+    return withContext(Dispatchers.IO) {
+      runCatching {
+        if (gameSlug.isNullOrBlank()) {
+          twitchApi.fetchTopStreams(cursor = cursor, first = limit)
+        } else {
+          twitchApi.fetchGameStreams(slug = gameSlug, cursor = cursor, first = limit)
+        }
+      }.getOrElse { err ->
+        AppLog.e("DTV-Twitch", "fetch live list failed slug=$gameSlug cursor=$cursor", err)
+        TwitchPage(items = emptyList(), cursor = null, hasMore = false)
+      }
+    }
+  }
+
+  override suspend fun searchTwitchChannels(keyword: String): List<Streamer> {
+    val trimmed = keyword.trim()
+    if (trimmed.isEmpty()) return emptyList()
+    return runCatching { twitchApi.searchChannels(trimmed) }
+      .onFailure { AppLog.e("DTV-Twitch", "search channels failed q=$trimmed", it) }
+      .getOrDefault(emptyList())
+  }
+
+  override suspend fun fetchTwitchPlayInfo(login: String): TwitchPlayInfo {
+    return runCatching { twitchApi.fetchPlayInfo(login) }
+      .onFailure { AppLog.e("DTV-Twitch", "fetch play info failed login=$login", it) }
+      .getOrThrow()
+  }
+
+  override suspend fun resolveTwitchStreamUrl(login: String, quality: String?): String {
+    return runCatching { twitchApi.resolveStreamUrl(login = login, quality = quality) }
+      .onSuccess { AppLog.i("DTV-Twitch", "resolved stream url login=$login quality=$quality") }
+      .onFailure { AppLog.e("DTV-Twitch", "resolve stream url failed login=$login quality=$quality", it) }
+      .getOrThrow()
+  }
+
+  override fun observeTwitchDanmaku(login: String): Flow<DanmakuMessage> {
+    return twitchDanmakuClient.observe(login)
   }
 }

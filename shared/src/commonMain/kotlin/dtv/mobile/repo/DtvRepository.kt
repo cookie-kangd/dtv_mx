@@ -52,6 +52,27 @@ data class DanmakuMessage(
   val color: String? = null,
 )
 
+data class TwitchCate(
+  val id: String,
+  val name: String,
+)
+
+data class TwitchVariant(
+  val name: String,
+  val display: String,
+  val url: String,
+)
+
+data class TwitchPlayInfo(
+  val variants: List<TwitchVariant>,
+)
+
+data class TwitchPage(
+  val items: List<Streamer>,
+  val cursor: String?,
+  val hasMore: Boolean,
+)
+
 data class BilibiliQrCode(
   val url: String,
   val qrcodeKey: String,
@@ -124,6 +145,18 @@ interface DtvRepository {
   suspend fun resolveBilibiliStreamUrl(roomId: String, qn: Int? = null): String
 
   fun observeBilibiliDanmaku(roomId: String): Flow<DanmakuMessage>
+
+  suspend fun fetchTwitchCategories(): List<TwitchCate>
+
+  suspend fun fetchTwitchLiveList(gameSlug: String?, cursor: String?, limit: Int): TwitchPage
+
+  suspend fun searchTwitchChannels(keyword: String): List<Streamer>
+
+  suspend fun fetchTwitchPlayInfo(login: String): TwitchPlayInfo
+
+  suspend fun resolveTwitchStreamUrl(login: String, quality: String? = null): String
+
+  fun observeTwitchDanmaku(login: String): Flow<DanmakuMessage>
 
   suspend fun generateBilibiliQrCode(): BilibiliQrCode
 
