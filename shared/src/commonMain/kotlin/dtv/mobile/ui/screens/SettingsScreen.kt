@@ -961,7 +961,6 @@ private fun PlatformSettingsSection(
     )
   }
 }
-}
 
 /** 可长按拖拽排序的纵向列表（仅用于平台排序，条目数很少，无需 LazyColumn）。 */
 @Composable
