@@ -98,17 +98,20 @@ fun PlatformHomeContent(
     Column(modifier = Modifier.fillMaxSize().padding(start = 14.dp, end = 14.dp, top = 6.dp)) {
       // 具体分类胶囊条：一级分区（板块）已迁移到顶栏右侧下拉菜单，
       // 这里平铺展示当前板块下的具体分类，选中项以全局主题色高亮。
-      LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        items(pills.size, key = { pills[it].key }) { index ->
-          CategoryPill(
-            label = pills[index].label,
-            selected = pills[index].key == selectedPillKey,
-            onClick = { onPillClick(index) },
-          )
+      // 分类很多的平台（如 Twitch）改为把全部分类收进顶栏下拉菜单，
+      // pills 传空列表即整体隐藏这一行，省去左右滑动找分类的麻烦。
+      if (pills.isNotEmpty()) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          items(pills.size, key = { pills[it].key }) { index ->
+            CategoryPill(
+              label = pills[index].label,
+              selected = pills[index].key == selectedPillKey,
+              onClick = { onPillClick(index) },
+            )
+          }
         }
+        Spacer(modifier = Modifier.height(4.dp))
       }
-
-      Spacer(modifier = Modifier.height(4.dp))
       aboveGrid?.invoke(this)
       Spacer(modifier = Modifier.height(8.dp))
 

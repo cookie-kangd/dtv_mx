@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dtv.mobile.state.CategoryMenuState
 import dtv.mobile.state.AppState
@@ -267,6 +268,7 @@ private fun HubTopBar(
                   fontWeight = FontWeight.Bold,
                   maxLines = 1,
                   softWrap = false,
+                  overflow = TextOverflow.Ellipsis,
                   modifier = Modifier.weight(1f),
                 )
                 Icon(
@@ -281,7 +283,9 @@ private fun HubTopBar(
               expanded = categoryMenuExpanded,
               onDismissRequest = { categoryMenuExpanded = false },
               offsetY = 50.dp,
-              width = 180.dp,
+              width = 200.dp,
+              // 分类多的平台（如分类数量较多的海外平台）菜单可超屏，限高后内部滚动
+              maxHeight = 380.dp,
             ) {
               menu?.options?.forEachIndexed { index, option ->
                 val selected = index == menu.selectedIndex
@@ -306,6 +310,8 @@ private fun HubTopBar(
                       MaterialTheme.colorScheme.onSurface
                     },
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                   )
                 }
               }

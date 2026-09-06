@@ -1,6 +1,7 @@
 package dtv.mobile.ui.screens.twitch
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,8 +14,8 @@ import dtv.mobile.model.Streamer
 import dtv.mobile.repo.TwitchCate
 import dtv.mobile.repo.TwitchPage
 import dtv.mobile.state.AppState
+import dtv.mobile.state.CategoryMenuState
 import dtv.mobile.state.SubscribedPartition
-import dtv.mobile.ui.screens.HomePillItem
 import dtv.mobile.ui.screens.PlatformHomeContent
 
 private const val PAGE_SIZE = 30
@@ -91,9 +92,35 @@ fun TwitchHomeScreen(
     }
   }
 
+  // 顶栏「板块下拉菜单」：Twitch 分类数量多（几十个），第二行横向平铺
+  // 左右滑动找分类非常不便，因此本平台特殊处理——隐藏胶囊行，把
+  // 「推荐 + 全部分类」整体收进顶栏右上角的下拉菜单（RootScaffold 渲染，
+  // 超高自动滚动）。推荐即官方「浏览」页的默认热门流（未选分类）。
+  DisposableEffect(games, selectedSlug) {
+    if (games.isNotEmpty() && appState.selectedPlatform == Platform.Twitch) {
+      val options = buildList {
+        add("推荐")
+        games.forEach { add(it.name) }
+      }
+      appState.categoryMenu = CategoryMenuState(
+        options = options,
+        selectedIndex = if (selectedSlug == null) {
+          0
+        } else {
+          1 + games.indexOfFirst { it.id == selectedSlug }.coerceAtLeast(0)
+        },
+        onSelect = { index ->
+          selectedSlug = if (index <= 0) null else games.getOrNull(index - 1)?.id
+        },
+      )
+    }
+    onDispose { }
+  }
+
+  // 「推荐」分区显示名（历史 id "twitch:all" 保留以兼容已记住的分区）
   LaunchedEffect(selectedSlug) {
     val partition = if (selectedSlug.isNullOrBlank()) {
-      SubscribedPartition(id = "twitch:all", name = "全部", platform = Platform.Twitch)
+      SubscribedPartition(id = "twitch:all", name = "推荐", platform = Platform.Twitch)
     } else {
       val name = games.firstOrNull { it.id == selectedSlug }?.name ?: selectedSlug!!
       SubscribedPartition(id = "twitch:g:$selectedSlug", name = name, platform = Platform.Twitch)
@@ -107,21 +134,12 @@ fun TwitchHomeScreen(
     gridState.scrollToItem(0)
   }
 
-  val pills = buildList {
-    add(HomePillItem(key = "all", label = "全部"))
-    games.forEach { add(HomePillItem(key = it.id, label = it.name)) }
-  }
-  val selectedPillKey = selectedSlug ?: "all"
-
   PlatformHomeContent(
     appState = appState,
     currentPartition = appState.currentPartition?.takeIf { it.platform == Platform.Twitch },
-    pills = pills,
-    selectedPillKey = selectedPillKey,
-    onPillClick = { index ->
-      val pill = pills.getOrNull(index) ?: return@PlatformHomeContent
-      selectedSlug = pill.key.takeIf { it != "all" }
-    },
+    pills = emptyList(),
+    selectedPillKey = null,
+    onPillClick = { },
     rooms = rooms,
     loading = loading,
     loadingMore = loadingMore,
