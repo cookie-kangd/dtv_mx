@@ -241,21 +241,19 @@ class AppState(
     if (selectedPlatform in platformDisabled) switchToFirstVisiblePlatform()
   }
 
-  /** 拖拽排序（索引基于可见平台列表）。 */
-  fun moveVisiblePlatform(fromIndex: Int, toIndex: Int) {
-    val visible = visiblePlatforms.toMutableList()
+  /**
+   * 拖拽排序（索引基于完整平台列表，含被关闭的平台）。
+   * 排序列表展示全部平台：关闭中的平台置灰但仍可拖动位置，
+   * 重新开启时按此顺序加回底栏——否则被关闭的平台在排序页「消失」。
+   */
+  fun movePlatform(fromIndex: Int, toIndex: Int) {
     if (fromIndex == toIndex) return
-    if (fromIndex !in visible.indices) return
-    if (toIndex !in visible.indices) return
+    if (fromIndex !in platformOrder.indices) return
+    if (toIndex !in platformOrder.indices) return
 
-    val item = visible.removeAt(fromIndex)
-    visible.add(toIndex, item)
-
-    // 把新的可见顺序写回全量顺序表：只覆盖"可见槽位"，
-    // 被关闭平台所在槽位保持不动，因此重新启用后会回到原来的相对位置。
-    val slots = platformOrder.indices.filter { platformOrder[it] !in platformDisabled }
     val next = platformOrder.toMutableList()
-    visible.forEachIndexed { i, platform -> next[slots[i]] = platform }
+    val item = next.removeAt(fromIndex)
+    next.add(toIndex, item)
     platformOrder = next
     subscriptionStore.savePlatformOrder(next.map { it.name })
   }

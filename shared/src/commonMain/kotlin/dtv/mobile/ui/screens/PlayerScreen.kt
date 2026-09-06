@@ -1482,8 +1482,11 @@ private fun PlayerSettingsDrawer(
       exit = slideOutHorizontally(animationSpec = tween(durationMillis = 220)) { -it } + fadeOut(animationSpec = tween(durationMillis = 140)),
       label = "settings_drawer",
     ) {
-      // 横屏设置抽屉：升级为真·毛玻璃浮岛。背后是 RootScaffold 根部
-      // 暴露的 HazeState（播放画面被实时模糊透出），视频上玻璃质感明显；
+      // 横屏设置抽屉：毛玻璃浮岛。背后是 RootScaffold 根部
+      // 暴露的 HazeState（播放画面被实时模糊透出），视频上玻璃质感明显。
+      // v0.2.5 修复：此前 tint 只有 0.52，播放画面（尤其亮场）透过玻璃后
+      // 选项文字对比度不足「看不清」；加深底色到 0.82、blur 收到 18dp、
+      // 高光渐变减弱——保留玻璃质感的同时保证文字清晰可读。
       // 未提供 HazeState 或低版本系统（API < 31，haze 自动降级）时退回
       // 原来的半透明黑面板，观感与行为不变。
       val glassHaze = LocalGlassHaze.current
@@ -1497,8 +1500,8 @@ private fun PlayerSettingsDrawer(
             glassHaze,
             shape = drawerShape,
             style = HazeStyle(
-              tint = Color(0xFF14161C).copy(alpha = 0.52f),
-              blurRadius = 24.dp,
+              tint = Color(0xFF14161C).copy(alpha = 0.82f),
+              blurRadius = 18.dp,
               noiseFactor = 0.06f,
             ),
           )
@@ -1521,11 +1524,11 @@ private fun PlayerSettingsDrawer(
           modifier = Modifier
             .fillMaxSize()
             .background(
-              // 玻璃高光：与底栏浮岛同款自上而下白色渐变，是毛玻璃质感的关键
+              // 玻璃高光：与底栏浮岛同款自上而下白色渐变（减弱后不影响顶部文字可读性）
               brush = Brush.verticalGradient(
                 colors = listOf(
-                  Color.White.copy(alpha = 0.12f),
-                  Color.White.copy(alpha = 0.04f),
+                  Color.White.copy(alpha = 0.07f),
+                  Color.White.copy(alpha = 0.02f),
                   Color.Transparent,
                 ),
               ),

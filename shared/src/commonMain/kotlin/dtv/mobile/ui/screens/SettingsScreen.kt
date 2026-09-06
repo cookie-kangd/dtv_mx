@@ -367,11 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.3"
+private const val LAST_RELEASE_VERSION = "0.2.4"
 private val LAST_RELEASE_NOTES = listOf(
-  "Twitch 平台完整接入（列表/分类/搜索/多画质/弹幕）",
-  "播放器横屏设置抽屉升级真毛玻璃；下拉菜单模拟玻璃质感",
-  "图片加载与卡片封面渲染性能优化，滚动更流畅",
+  "卡片按压缩放反馈，触感更清晰",
+  "日志异步落盘，直播更流畅更省电",
+  "网格卡片封面解析复用，滚动更顺",
 ).joinToString("\n") { "· $it" }
 
 @Composable
@@ -940,22 +940,16 @@ private fun PlatformSettingsSection(
       Text("平台排序", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
       Spacer(modifier = Modifier.height(2.dp))
       Text(
-        text = "长按右侧手柄上下拖动即可调整顺序，下方切换栏会立即按新顺序排列。",
+        text = "长按右侧手柄上下拖动即可调整顺序，下方切换栏会立即按新顺序排列。已关闭的平台也会显示在此处（置灰），重新开启后按此顺序加回。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
       )
       Spacer(modifier = Modifier.height(10.dp))
-      if (appState.visiblePlatforms.isEmpty()) {
-        Text(
-          text = "当前没有已启用的平台，请先在上方开启至少一个平台。",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-        )
-      } else {
-        PlatformReorderList(
-          platforms = appState.visiblePlatforms,
-        onReorder = { notice = "顺序已更新：${appState.visiblePlatforms.joinToString(" · ") { it.title }}（无需重启）" },
-        onMove = { from, to -> appState.moveVisiblePlatform(from, to) },
+      PlatformReorderList(
+        platforms = appState.platformOrder,
+        disabled = appState.platformDisabled,
+        onReorder = { notice = "顺序已更新：${appState.platformOrder.joinToString(" · ") { it.title }}（无需重启）" },
+        onMove = { from, to -> appState.movePlatform(from, to) },
       )
     }
 
@@ -973,6 +967,7 @@ private fun PlatformSettingsSection(
 @Composable
 private fun PlatformReorderList(
   platforms: List<Platform>,
+  disabled: Set<Platform> = emptySet(),
   onMove: (fromIndex: Int, toIndex: Int) -> Unit,
   onReorder: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1062,8 +1057,13 @@ private fun PlatformReorderList(
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           Text(
-            text = platform.title,
+            text = if (platform in disabled) "${platform.title}（已关闭）" else platform.title,
             style = MaterialTheme.typography.bodyLarge,
+            color = if (platform in disabled) {
+              MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            } else {
+              Color.Unspecified
+            },
             modifier = Modifier.weight(1f),
           )
           DragHandleIcon(
