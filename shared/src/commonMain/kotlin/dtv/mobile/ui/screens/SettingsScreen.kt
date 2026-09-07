@@ -367,12 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.9"
+private const val LAST_RELEASE_VERSION = "0.2.10"
 private val LAST_RELEASE_NOTES = listOf(
-  "海外平台选中的分类在看播返回后不再被重置",
-  "海外平台分类扩容至 100 个",
-  "分类栏滚动位置在看播返回后保持不变",
-  "退出清理缓存改为多路径兜底，划掉卡片也能清干净",
+  "顶栏下拉菜单打开时自动定位到当前选中项",
+  "分类胶囊条滚动位置在看播返回后恢复更可靠",
+  "海外平台搜索合并精确直查，搜频道名必出结果",
 ).joinToString("\n") { "· $it" }
 
 @Composable

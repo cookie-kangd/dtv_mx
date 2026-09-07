@@ -109,10 +109,11 @@ fun TwitchHomeScreen(
       }
       appState.categoryMenu = CategoryMenuState(
         options = options,
-        selectedIndex = if (selectedSlug == null) {
-          0
-        } else {
-          1 + games.indexOfFirst { it.id == selectedSlug }.coerceAtLeast(0)
+        // slug 在分类列表中找不到（分类下架/id 变更）时回落高亮「推荐」，
+        // 不能 coerceAtLeast(0) 后 +1 错误高亮第一个分类（误导用户当前选择）。
+        selectedIndex = when {
+          selectedSlug == null -> 0
+          else -> games.indexOfFirst { it.id == selectedSlug }.takeIf { it >= 0 }?.plus(1) ?: 0
         },
         onSelect = { index ->
           selectedSlug = if (index <= 0) null else games.getOrNull(index - 1)?.id

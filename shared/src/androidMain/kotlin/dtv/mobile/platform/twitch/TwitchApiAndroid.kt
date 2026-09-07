@@ -35,6 +35,10 @@ import kotlinx.serialization.json.put
 
 private const val TAG = "DTV-Twitch"
 
+// master m3u8 解析用正则：提前编译为常量，避免每次解析都重复编译（解析在切画质时触发）
+private val VIDEO_ATTR_REGEX = Regex("VIDEO=\"([^\"]+)\"")
+private val VARIANT_HEIGHT_REGEX = Regex("(\\d+)p(\\d+)")
+
 /** usher master m3u8 里的画质代号 -> 展示名 */
 private fun variantDisplayName(raw: String): String = when (raw.lowercase()) {
   "chunked" -> "原画"
@@ -172,20 +176,24 @@ class TwitchApiAndroid(
     val trimmed = keyword.trim()
     if (trimmed.isEmpty()) return emptyList()
     // searchFor 固定只返回 10 条按相关度排序的结果，搜具体频道名时经常排不进去；
-    // 并发补一发 user(login) 精确直查（login 一般就是频道名小写），命中则置顶合并。
+    // 补一发 user(login) 精确直查（login 一般就是频道名小写），命中则置顶合并。
+    // 两个 GQL 请求并发执行（此前写法 async 后立即 await 实为串行，白丢一个往返时延）。
     val lowered = trimmed.lowercase()
-    val exact = coroutineScope {
-      async { runCatching { fetchUserSnapshot(lowered) }.getOrNull() }
-    }.await()
-    val data = gql("""
-      query(${"$"}q:String!){
-        searchFor(userQuery:${"$"}q, platform:"web"){
-          channels{ items{ login displayName profileImageURL(width:70)
-            stream{ id title viewersCount previewImageURL(width:320,height:180) game{ displayName } } } }
-        }
+    val (exact, data) = coroutineScope {
+      val exactDeferred = async { runCatching { fetchUserSnapshot(lowered) }.getOrNull() }
+      val dataDeferred = async {
+        gql("""
+          query(${"$"}q:String!){
+            searchFor(userQuery:${"$"}q, platform:"web"){
+              channels{ items{ login displayName profileImageURL(width:70)
+                stream{ id title viewersCount previewImageURL(width:320,height:180) game{ displayName } } } }
+            }
+          }
+        """.trimIndent(), buildJsonObject { put("q", keyword) })
       }
-    """.trimIndent(), buildJsonObject { put("q", keyword) })
-      ?: return listOfNotNull(exact)
+      exactDeferred.await() to dataDeferred.await()
+    }
+    if (data == null) return listOfNotNull(exact)
     val items = (data.obj("searchFor")?.obj("channels")?.get("items") as? kotlinx.serialization.json.JsonArray).orEmpty()
     val list = items.mapNotNull { e ->
       val obj = e as? JsonObject ?: return@mapNotNull null
@@ -305,7 +313,7 @@ class TwitchApiAndroid(
       val line = raw.trim()
       if (line.isEmpty()) return@forEach
       if (line.startsWith("#EXT-X-STREAM-INF")) {
-        pendingVideo = Regex("VIDEO=\"([^\"]+)\"").find(line)?.groupValues?.get(1)
+        pendingVideo = VIDEO_ATTR_REGEX.find(line)?.groupValues?.get(1)
       } else if (!line.startsWith("#")) {
         val video = pendingVideo
         pendingVideo = null
@@ -319,7 +327,7 @@ class TwitchApiAndroid(
       "chunked" -> 0
       "audio_only" -> 99
       else -> {
-        val height = Regex("(\\d+)p(\\d+)").find(v.name)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val height = VARIANT_HEIGHT_REGEX.find(v.name)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
         (1000 - height).coerceIn(1, 98)
       }
     }

@@ -79,18 +79,21 @@ fun PlatformHomeContent(
   var refreshing by remember { mutableStateOf(false) }
 
   // 胶囊条滚动位置：进直播间时整页会被销毁，LazyListState 随之丢失，
-  // 因此把位置按「平台 + 分区」存进 AppState，返回后原样还原（用户滚到哪就停在哪）。
-  val pillScrollKey = "${appState.selectedPlatform.name}:${currentPartition?.id ?: "-"}"
-  val savedPillScroll = remember(pillScrollKey) { appState.pillScrollPosition(pillScrollKey) }
-  // state 必须跟随 key 重建：分区是异步恢复的，首帧可能先以 null 分区组合出
-  // 一个 state，若不重建，之后拿到真实 saved 位置也没机会再应用。
-  // 构造后不在初始化参数里给位置（各版本工厂签名有差异），统一由下方恢复 effect 定位。
-  val pillListState = remember(pillScrollKey) { LazyListState() }
-  // v0.2.9 修复失效的根因：返回页面时分类列表是异步填充的，列表为空的瞬间
-  // LazyRow 把 index 钳到 0，若此时就回写，会把真实位置覆盖成 (0,0)。
+  // 因此把位置按「平台」粒度存进 AppState，返回后原样还原。
+  // v0.2.11 修复：key 绝不能包含分区 id —— 点胶囊本身就会切换分区
+  // （如 douyu:c2:<id>），若 key 随分区变化，remember 会重建 LazyListState，
+  // 滚动位置直接跳回第一个胶囊（v0.2.10「越改越糟」的根因）。
+  // 按平台粒度共享一份位置：点胶囊切换分类时 state 保持不动，滚动在哪就在哪。
+  val pillPlatformKey = appState.selectedPlatform.name
+  val savedPillScroll = remember(pillPlatformKey) { appState.pillScrollPosition(pillPlatformKey) }
+  // state 只随平台切换重建，绝不随分区/分类变化重建。
+  // 构造时不在初始化参数里给位置（各版本工厂签名有差异），统一由下方恢复 effect 定位。
+  val pillListState = remember(pillPlatformKey) { LazyListState() }
+  // 返回页面时分类列表是异步填充的，列表为空的瞬间 LazyRow 会把 index 钳到 0，
+  // 若此时就回写，会把真实位置覆盖成 (0,0)。
   // 因此：恢复动作等列表非空后再执行一次；列表非空前绝不回写。
-  var pillRestored by remember(pillScrollKey) { mutableStateOf(false) }
-  LaunchedEffect(pillListState, pillScrollKey, pills.size) {
+  var pillRestored by remember(pillPlatformKey) { mutableStateOf(false) }
+  LaunchedEffect(pillListState, pillPlatformKey, pills.size) {
     if (pills.isEmpty()) return@LaunchedEffect
     if (!pillRestored) {
       val saved = savedPillScroll
@@ -102,7 +105,7 @@ fun PlatformHomeContent(
     snapshotFlow {
       pillListState.firstVisibleItemIndex to pillListState.firstVisibleItemScrollOffset
     }.collect { (index, offset) ->
-      appState.savePillScrollPosition(pillScrollKey, index, offset)
+      appState.savePillScrollPosition(pillPlatformKey, index, offset)
     }
   }
 
