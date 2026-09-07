@@ -87,7 +87,6 @@ fun RoundedDropdownMenu(
   val density = LocalDensity.current
   val scrollState = rememberScrollState()
   val itemTops = mutableStateMapOf<Int, Int>()
-  val scope = MenuScope(this@Column as ColumnScope, itemTops, scrollState)
 
   // 打开后自动定位：等首次布局完成（条目位置与最大滚动值就绪），
   // 把选中项滚到视口上部留一点上下文，静默定位不做动画。
@@ -95,7 +94,7 @@ fun RoundedDropdownMenu(
     if (selectedIndex == null || selectedIndex < 0) return@LaunchedEffect
     snapshotFlow { scrollState.maxValue > 0 && itemTops.containsKey(selectedIndex) }
       .filter { it }
-      .let { flow -> kotlinx.coroutines.flow.first(flow) }
+      .first()
     val top = itemTops[selectedIndex] ?: return@LaunchedEffect
     val target = (top - with(density) { 56.dp.toPx() }).toInt()
       .coerceIn(0, scrollState.maxValue)
@@ -144,7 +143,10 @@ fun RoundedDropdownMenu(
             },
           ),
         verticalArrangement = Arrangement.spacedBy(2.dp),
-        content = { scope.content() },
+        content = {
+          val menuScope = MenuScope(this, itemTops, scrollState)
+          menuScope.content()
+        },
       )
     }
   }

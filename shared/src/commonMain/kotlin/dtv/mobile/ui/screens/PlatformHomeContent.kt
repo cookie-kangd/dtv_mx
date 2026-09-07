@@ -84,12 +84,8 @@ fun PlatformHomeContent(
   val savedPillScroll = remember(pillScrollKey) { appState.pillScrollPosition(pillScrollKey) }
   // state 必须跟随 key 重建：分区是异步恢复的，首帧可能先以 null 分区组合出
   // 一个 state，若不重建，之后拿到真实 saved 位置也没机会再应用。
-  val pillListState = remember(pillScrollKey) {
-    LazyListState(
-      initialFirstVisibleItemIndex = savedPillScroll?.first ?: 0,
-      initialFirstVisibleItemScrollOffset = savedPillScroll?.second ?: 0,
-    )
-  }
+  // 构造后不在初始化参数里给位置（各版本工厂签名有差异），统一由下方恢复 effect 定位。
+  val pillListState = remember(pillScrollKey) { LazyListState() }
   // v0.2.9 修复失效的根因：返回页面时分类列表是异步填充的，列表为空的瞬间
   // LazyRow 把 index 钳到 0，若此时就回写，会把真实位置覆盖成 (0,0)。
   // 因此：恢复动作等列表非空后再执行一次；列表非空前绝不回写。
@@ -98,7 +94,7 @@ fun PlatformHomeContent(
     if (pills.isEmpty()) return@LaunchedEffect
     if (!pillRestored) {
       val saved = savedPillScroll
-      if (saved != null && saved.first > 0 && saved.first != pillListState.firstVisibleItemIndex) {
+      if (saved != null && saved.first > 0 && saved.first < pills.size) {
         runCatching { pillListState.scrollToItem(saved.first, saved.second) }
       }
       pillRestored = true
