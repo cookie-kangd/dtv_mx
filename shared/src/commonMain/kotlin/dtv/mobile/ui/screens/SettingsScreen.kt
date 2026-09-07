@@ -367,11 +367,12 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.8"
+private const val LAST_RELEASE_VERSION = "0.2.9"
 private val LAST_RELEASE_NOTES = listOf(
-  "搜索去掉联想，输入完成即搜一次，不再关闭输入法",
-  "安卓 12 以下毛玻璃自动降级实色，底栏样式正常",
-  "安卓 10 以下检查更新下载权限问题修复",
+  "海外平台选中的分类在看播返回后不再被重置",
+  "海外平台分类扩容至 100 个",
+  "分类栏滚动位置在看播返回后保持不变",
+  "退出清理缓存改为多路径兜底，划掉卡片也能清干净",
 ).joinToString("\n") { "· $it" }
 
 @Composable

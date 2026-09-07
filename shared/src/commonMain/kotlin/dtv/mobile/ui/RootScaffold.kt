@@ -286,12 +286,15 @@ private fun HubTopBar(
               width = 200.dp,
               // 分类多的平台（如分类数量较多的海外平台）菜单可超屏，限高后内部滚动
               maxHeight = 380.dp,
+              // 打开菜单自动把当前选中项定位到视口上部，不用每次从头滑到底
+              selectedIndex = menu?.selectedIndex,
             ) {
               menu?.options?.forEachIndexed { index, option ->
                 val selected = index == menu.selectedIndex
                 Row(
                   modifier = Modifier
                     .fillMaxWidth()
+                    .menuItemTop(index)
                     .clip(RoundedCornerShape(10.dp))
                     .clickable {
                       categoryMenuExpanded = false

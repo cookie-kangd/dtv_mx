@@ -21,6 +21,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import java.util.UUID
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -167,6 +169,14 @@ class TwitchApiAndroid(
   }
 
   suspend fun searchChannels(keyword: String): List<Streamer> {
+    val trimmed = keyword.trim()
+    if (trimmed.isEmpty()) return emptyList()
+    // searchFor 固定只返回 10 条按相关度排序的结果，搜具体频道名时经常排不进去；
+    // 并发补一发 user(login) 精确直查（login 一般就是频道名小写），命中则置顶合并。
+    val lowered = trimmed.lowercase()
+    val exact = coroutineScope {
+      async { runCatching { fetchUserSnapshot(lowered) }.getOrNull() }
+    }.await()
     val data = gql("""
       query(${"$"}q:String!){
         searchFor(userQuery:${"$"}q, platform:"web"){
@@ -175,9 +185,9 @@ class TwitchApiAndroid(
         }
       }
     """.trimIndent(), buildJsonObject { put("q", keyword) })
-      ?: return emptyList()
+      ?: return listOfNotNull(exact)
     val items = (data.obj("searchFor")?.obj("channels")?.get("items") as? kotlinx.serialization.json.JsonArray).orEmpty()
-    return items.mapNotNull { e ->
+    val list = items.mapNotNull { e ->
       val obj = e as? JsonObject ?: return@mapNotNull null
       val login = obj.str("login")?.trim().orEmpty()
       if (login.isEmpty()) return@mapNotNull null
@@ -193,6 +203,10 @@ class TwitchApiAndroid(
         isLive = stream != null,
       )
     }
+    if (exact != null && list.none { it.roomId.equals(exact.roomId, ignoreCase = true) }) {
+      return listOf(exact) + list
+    }
+    return list
   }
 
   /** 关注卡片：单频道元数据 + 开播状态。未开播时 stream 为 null。 */

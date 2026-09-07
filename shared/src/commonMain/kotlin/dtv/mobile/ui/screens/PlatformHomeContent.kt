@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -82,14 +82,32 @@ fun PlatformHomeContent(
   // 因此把位置按「平台 + 分区」存进 AppState，返回后原样还原（用户滚到哪就停在哪）。
   val pillScrollKey = "${appState.selectedPlatform.name}:${currentPartition?.id ?: "-"}"
   val savedPillScroll = remember(pillScrollKey) { appState.pillScrollPosition(pillScrollKey) }
-  val pillListState = rememberLazyListState(
-    initialFirstVisibleItemIndex = savedPillScroll?.first ?: 0,
-    initialFirstVisibleItemScrollOffset = savedPillScroll?.second ?: 0,
-  )
-  LaunchedEffect(pillListState, pillScrollKey) {
+  // state 必须跟随 key 重建：分区是异步恢复的，首帧可能先以 null 分区组合出
+  // 一个 state，若不重建，之后拿到真实 saved 位置也没机会再应用。
+  val pillListState = remember(pillScrollKey) {
+    LazyListState(
+      initialFirstVisibleItemIndex = savedPillScroll?.first ?: 0,
+      initialFirstVisibleItemScrollOffset = savedPillScroll?.second ?: 0,
+    )
+  }
+  // v0.2.9 修复失效的根因：返回页面时分类列表是异步填充的，列表为空的瞬间
+  // LazyRow 把 index 钳到 0，若此时就回写，会把真实位置覆盖成 (0,0)。
+  // 因此：恢复动作等列表非空后再执行一次；列表非空前绝不回写。
+  var pillRestored by remember(pillScrollKey) { mutableStateOf(false) }
+  LaunchedEffect(pillListState, pillScrollKey, pills.size) {
+    if (pills.isEmpty()) return@LaunchedEffect
+    if (!pillRestored) {
+      val saved = savedPillScroll
+      if (saved != null && saved.first > 0 && saved.first != pillListState.firstVisibleItemIndex) {
+        runCatching { pillListState.scrollToItem(saved.first, saved.second) }
+      }
+      pillRestored = true
+    }
     snapshotFlow {
       pillListState.firstVisibleItemIndex to pillListState.firstVisibleItemScrollOffset
-    }.collect { (index, offset) -> appState.savePillScrollPosition(pillScrollKey, index, offset) }
+    }.collect { (index, offset) ->
+      appState.savePillScrollPosition(pillScrollKey, index, offset)
+    }
   }
 
   LazyGridLoadMoreEffect(
