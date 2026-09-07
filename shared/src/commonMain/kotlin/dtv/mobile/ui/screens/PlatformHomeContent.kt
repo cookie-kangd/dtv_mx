@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -26,6 +27,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -75,6 +77,20 @@ fun PlatformHomeContent(
   val scope = rememberCoroutineScope()
   var refreshing by remember { mutableStateOf(false) }
 
+  // 胶囊条滚动位置：进直播间时整页会被销毁，LazyListState 随之丢失，
+  // 因此把位置按「平台 + 分区」存进 AppState，返回后原样还原（用户滚到哪就停在哪）。
+  val pillScrollKey = "${appState.selectedPlatform.name}:${currentPartition?.id ?: "-"}"
+  val savedPillScroll = remember(pillScrollKey) { appState.pillScrollPosition(pillScrollKey) }
+  val pillListState = rememberLazyListState(
+    initialFirstVisibleItemIndex = savedPillScroll?.first ?: 0,
+    initialFirstVisibleItemScrollOffset = savedPillScroll?.second ?: 0,
+  )
+  LaunchedEffect(pillListState, pillScrollKey) {
+    snapshotFlow {
+      pillListState.firstVisibleItemIndex to pillListState.firstVisibleItemScrollOffset
+    }.collect { (index, offset) -> appState.savePillScrollPosition(pillScrollKey, index, offset) }
+  }
+
   LazyGridLoadMoreEffect(
     gridState = gridState,
     enabled = !loading && !loadingMore && hasMore,
@@ -101,7 +117,11 @@ fun PlatformHomeContent(
       // 分类很多的平台（如 Twitch）改为把全部分类收进顶栏下拉菜单，
       // pills 传空列表即整体隐藏这一行，省去左右滑动找分类的麻烦。
       if (pills.isNotEmpty()) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        LazyRow(
+          state = pillListState,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
           items(pills.size, key = { pills[it].key }) { index ->
             CategoryPill(
               label = pills[index].label,

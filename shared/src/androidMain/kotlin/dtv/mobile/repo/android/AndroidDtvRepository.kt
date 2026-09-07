@@ -762,7 +762,9 @@ class AndroidDtvRepository(
 
   override suspend fun fetchTwitchCategories(): List<TwitchCate> {
     return withContext(Dispatchers.IO) {
-      runCatching { twitchApi.fetchCategories() }
+      // 取接口允许的上限 100 条（first 最大 100，游标翻页会被 integrity check 拒绝），
+      // 此前只取 40 条，用户觉得比网页版少很多。
+      runCatching { twitchApi.fetchCategories(first = 100) }
         .onFailure { AppLog.e("DTV-Twitch", "fetch categories failed", it) }
         .getOrDefault(emptyList())
     }

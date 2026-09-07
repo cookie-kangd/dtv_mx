@@ -27,6 +27,10 @@ fun TwitchHomeScreen(
 ) {
   var games: List<TwitchCate> by remember { mutableStateOf(emptyList()) }
   var selectedSlug: String? by remember { mutableStateOf<String?>(null) }
+  // 分类恢复是否已完成。进直播间时平台页会被整页销毁（AnimatedContent 按 screen 切换），
+  // 返回后重建；恢复是异步的（要拉分类），而下面写回分区的 effect 是同步触发的，
+  // 若不加这道闸门，它会用「还没恢复的 null」立刻把已保存的分类覆盖成「推荐」。
+  var restored by remember { mutableStateOf(false) }
 
   var rooms: List<Streamer> by remember { mutableStateOf(emptyList()) }
   var loading by remember { mutableStateOf(true) }
@@ -52,6 +56,7 @@ fun TwitchHomeScreen(
       ?.takeIf { it.startsWith("twitch:g:") }
       ?.substringAfter("twitch:g:")
       ?.takeIf { it.isNotBlank() }
+    restored = true
     loading = false
   }
 
@@ -117,8 +122,11 @@ fun TwitchHomeScreen(
     onDispose { }
   }
 
-  // 「推荐」分区显示名（历史 id "twitch:all" 保留以兼容已记住的分区）
-  LaunchedEffect(selectedSlug) {
+  // 「推荐」分区显示名（历史 id "twitch:all" 保留以兼容已记住的分区）。
+  // 必须等恢复完成（restored）后才写回分区并落库：恢复期间 selectedSlug 还是 null，
+  // 直接落库会把用户上次选的分类清成「推荐」，导致看完直播回来分类被重置。
+  LaunchedEffect(selectedSlug, restored) {
+    if (!restored) return@LaunchedEffect
     val partition = if (selectedSlug.isNullOrBlank()) {
       SubscribedPartition(id = "twitch:all", name = "推荐", platform = Platform.Twitch)
     } else {

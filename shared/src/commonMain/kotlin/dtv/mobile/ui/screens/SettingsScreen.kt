@@ -367,11 +367,11 @@ private fun PlatformLoginSection(
  * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
  * 当前版本则由 UpdateManager 动态读取，无需维护。
  */
-private const val LAST_RELEASE_VERSION = "0.2.7"
+private const val LAST_RELEASE_VERSION = "0.2.8"
 private val LAST_RELEASE_NOTES = listOf(
-  "搜索框输入丢字符与输入法自动收起问题修复",
-  "平板未开启默认横屏时一律竖屏进入直播间",
-  "开启默认横屏后退出一次即回竖屏",
+  "搜索去掉联想，输入完成即搜一次，不再关闭输入法",
+  "安卓 12 以下毛玻璃自动降级实色，底栏样式正常",
+  "安卓 10 以下检查更新下载权限问题修复",
 ).joinToString("\n") { "· $it" }
 
 @Composable

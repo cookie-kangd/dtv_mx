@@ -80,6 +80,21 @@ class AppState(
   val danmuBlockKeywords = mutableStateListOf<String>()
   private val rememberedCategoryByPlatform = mutableStateMapOf<Platform, String>()
 
+  /**
+   * 分类胶囊条的横向滚动位置（按「平台 + 分区 id」记忆）。
+   *
+   * 进直播间时平台页会被整页销毁（根布局按 screen 做 AnimatedContent 切换），
+   * 组合内的 LazyListState 随之丢失，返回后胶囊条会滚回最前。
+   * 这里把位置提到 AppState 保存，返回后按同一分区还原。
+   */
+  private val pillScrollPositions = HashMap<String, Pair<Int, Int>>()
+
+  fun pillScrollPosition(key: String): Pair<Int, Int>? = pillScrollPositions[key]
+
+  fun savePillScrollPosition(key: String, index: Int, offset: Int) {
+    pillScrollPositions[key] = index to offset
+  }
+
   init {
     themeMode = subscriptionStore.loadThemeMode()
     followedStreamers.addAll(subscriptionStore.loadFollowedStreamers())
