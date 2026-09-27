@@ -34,9 +34,6 @@ fun TwitchHomeScreen(
 
   var rooms: List<Streamer> by remember { mutableStateOf(emptyList()) }
   var loading by remember { mutableStateOf(true) }
-  var loadingMore by remember { mutableStateOf(false) }
-  var hasMore by remember { mutableStateOf(true) }
-  var cursor: String? by remember { mutableStateOf(null) }
 
   val gridState = rememberLazyGridState()
 
@@ -57,58 +54,42 @@ fun TwitchHomeScreen(
       ?.substringAfter("twitch:g:")
       ?.takeIf { it.isNotBlank() }
     restored = true
-    loading = false
+    // 这里刻意不复位 loading：分类拉完立刻会由下面写回分区的 effect 触发 loadPage()，
+    // 中间复位会让界面闪一下「空列表」，直接让骨架屏一路铺到数据回来。
   }
 
-  suspend fun loadPage(reset: Boolean) {
-    if (reset) {
-      rooms = emptyList()
-      hasMore = true
-      cursor = null
-    }
-    if (!hasMore) return
-
-    if (reset) loading = true else loadingMore = true
+  suspend fun loadPage() {
+    loading = true
     try {
       val result: TwitchPage = appState.repo.fetchTwitchLiveList(
         gameSlug = selectedSlug,
-        cursor = cursor,
         limit = PAGE_SIZE,
+        chineseOnly = appState.twitchChineseOnly,
       )
-      val incoming = result.items
-      val old = rooms
-      val (merged, addedCount) = if (reset) {
-        incoming to incoming.size
-      } else {
-        val existing = old.asSequence().map { it.roomId }.toHashSet()
-        val added = incoming.filter { existing.add(it.roomId) }
-        (old + added) to added.size
-      }
-      rooms = merged
-      cursor = result.cursor ?: cursor
-      hasMore = result.hasMore && addedCount > 0
+      rooms = result.items
     } finally {
-      if (reset) {
-        loading = false
-        appState.platformSwitchLoading = false
-      } else {
-        loadingMore = false
-      }
+      loading = false
+      appState.platformSwitchLoading = false
     }
   }
 
   // 顶栏「板块下拉菜单」：Twitch 分类数量多（几十个），第二行横向平铺
   // 左右滑动找分类非常不便，因此本平台特殊处理——隐藏胶囊行，把
   // 「推荐 + 全部分类」整体收进顶栏右上角的下拉菜单（RootScaffold 渲染，
-  // 超高自动滚动）。推荐即官方「浏览」页的默认热门流（未选分类）。
-  DisposableEffect(games, selectedSlug) {
-    if (games.isNotEmpty() && appState.selectedPlatform == Platform.Twitch) {
-      val options = buildList {
-        add("推荐")
-        games.forEach { add(it.name) }
-      }
+  // 超高自动滚动）。「推荐」= 中文（ZH）热门 + 中文谈天说地 + 中文IRL 的聚合流
+  // （设置里可切回全语言人气总榜），点具体分类则只看该分类（不限语言）。
+  // 分类下拉项：只随分类列表重建，不随 selectedSlug 变化重建
+  // （100+ 条分类每次选中都 buildList 一遍纯属浪费）。
+  val menuOptions = remember(games) {
+    buildList {
+      add("推荐")
+      games.forEach { add(it.name) }
+    }
+  }
+  DisposableEffect(menuOptions, selectedSlug) {
+    if (menuOptions.isNotEmpty() && appState.selectedPlatform == Platform.Twitch) {
       appState.categoryMenu = CategoryMenuState(
-        options = options,
+        options = menuOptions,
         // slug 在分类列表中找不到（分类下架/id 变更）时回落高亮「推荐」，
         // 不能 coerceAtLeast(0) 后 +1 错误高亮第一个分类（误导用户当前选择）。
         selectedIndex = when {
@@ -126,7 +107,8 @@ fun TwitchHomeScreen(
   // 「推荐」分区显示名（历史 id "twitch:all" 保留以兼容已记住的分区）。
   // 必须等恢复完成（restored）后才写回分区并落库：恢复期间 selectedSlug 还是 null，
   // 直接落库会把用户上次选的分类清成「推荐」，导致看完直播回来分类被重置。
-  LaunchedEffect(selectedSlug, restored) {
+  // twitchChineseOnly 作为 key：在设置里改了「推荐只看中文」后回到本页会自动重新拉取。
+  LaunchedEffect(selectedSlug, restored, appState.twitchChineseOnly) {
     if (!restored) return@LaunchedEffect
     val partition = if (selectedSlug.isNullOrBlank()) {
       SubscribedPartition(id = "twitch:all", name = "推荐", platform = Platform.Twitch)
@@ -139,7 +121,7 @@ fun TwitchHomeScreen(
       platform = Platform.Twitch,
       id = partition.id,
     )
-    loadPage(reset = true)
+    loadPage()
     gridState.scrollToItem(0)
   }
 
@@ -151,16 +133,18 @@ fun TwitchHomeScreen(
     onPillClick = { },
     rooms = rooms,
     loading = loading,
-    loadingMore = loadingMore,
-    hasMore = hasMore,
+    // Twitch 匿名接口单页最多 30 条且游标翻页被服务端 integrity check 拒绝，
+    // 因此固定单页：底部提示「无更多直播间」，不再显示会落空的「继续滑动加载更多」。
+    loadingMore = false,
+    hasMore = false,
     gridState = gridState,
     onRefresh = {
       if (!loading) {
-        loadPage(reset = true)
+        loadPage()
         gridState.scrollToItem(0)
       }
     },
-    onLoadMore = { loadPage(reset = false) },
+    onLoadMore = { },
     modifier = modifier,
     aboveGrid = null,
   )

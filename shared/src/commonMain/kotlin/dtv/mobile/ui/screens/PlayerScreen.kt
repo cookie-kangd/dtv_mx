@@ -62,6 +62,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -142,6 +143,10 @@ fun PlayerScreen(
   modifier: Modifier = Modifier,
 ) {
   var url by remember(streamer?.roomId) { mutableStateOf<String?>(null) }
+  // 「本房间是否已经起播过」：切画质/线路时 reloadUrl() 会先把 url 置 null 再赋新值，
+  // 若弹幕 effect 直接以 url 为 key，切一次画质就会把弹幕连接整条拆掉重连
+  // （清空已有弹幕、B站还要重走一次鉴权）。改成这个只在起播前 false、
+  // 起播后恒为 true 的标志，切画质时弹幕连接保持不动。
   var error by remember(streamer?.roomId) { mutableStateOf<String?>(null) }
   var loading by remember(streamer?.roomId) { mutableStateOf(false) }
   var playInfo by remember(streamer?.roomId) { mutableStateOf<DouyuPlayInfo?>(null) }
@@ -176,6 +181,7 @@ fun PlayerScreen(
   val requestNotificationPermission = rememberNotificationPermissionRequester()
   var videoAspectRatio by remember(streamer?.roomId) { mutableStateOf<Float?>(null) }
   var videoReady by remember(streamer?.roomId) { mutableStateOf(false) }
+  var playbackStarted by remember(streamer?.roomId) { mutableStateOf(false) }
   // 「默认横屏」开启时，进入直播间即按全屏横屏（Manual）方式观看，离开时恢复竖屏
   var fullscreen by remember(streamer?.roomId) { mutableStateOf(appState.landscapeEnabled) }
   var fullscreenEntry by remember(streamer?.roomId) {
@@ -197,7 +203,9 @@ fun PlayerScreen(
   // 切房时旧请求不会被自动取消（reloadUrl 用的是 composable 的 scope 而非 LaunchedEffect），
   // 若不校验就会把上一个房间的地址写进新房间，表现为「点进去播的是上一个直播间」。
   val currentRoomId = remember { mutableStateOf<String?>(null) }
-  currentRoomId.value = streamer?.roomId
+  // 组合阶段直接写 state 属于副作用：组合被丢弃/重试时会写入「不该生效」的值。
+  // 改到 SideEffect 里，在组合成功提交后再同步，异步解析返回时读到的仍是当前房间。
+  SideEffect { currentRoomId.value = streamer?.roomId }
   // 画质/线路切换触发的地址解析任务：再次切换或切房时先取消上一个，避免旧结果覆盖新结果
   var resolveJob by remember { mutableStateOf<Job?>(null) }
 
@@ -383,7 +391,11 @@ fun PlayerScreen(
     derivedStateOf { appState.danmuBlockKeywords.map { it.lowercase() }.filter { it.isNotBlank() } }
   }
 
-  LaunchedEffect(streamer?.roomId, streamer?.platform, danmakuEnabled, listenOnly, url, blockKeywordsLower) {
+  LaunchedEffect(url) {
+    if (url != null) playbackStarted = true
+  }
+
+  LaunchedEffect(streamer?.roomId, streamer?.platform, danmakuEnabled, listenOnly, playbackStarted, blockKeywordsLower) {
     val s = streamer ?: return@LaunchedEffect
     // 熄屏听播开启时彻底断开弹幕连接：省掉 WebSocket 收包、列表重组与网络开销，
     // 让后台占用真正只剩一路音频解码。
@@ -391,7 +403,9 @@ fun PlayerScreen(
       danmakuMessages = emptyList()
       return@LaunchedEffect
     }
-    if (url == null) {
+    // 地址还没解析出来先不连弹幕；注意这里看的是 playbackStarted 而不是 url，
+    // 这样切画质过程中 url 短暂为 null 也不会把连接拆掉。
+    if (!playbackStarted) {
       danmakuMessages = emptyList()
       return@LaunchedEffect
     }
@@ -594,7 +608,9 @@ fun PlayerScreen(
             Platform.Twitch -> {
               // 「自动」= master m3u8 交给播放器 ABR；其余为 usher 返回的固定档位
               RowWrap(
-                items = listOf("自动" to null) + twitchInfo?.variants.orEmpty().map { it.name to it.name },
+                // 左侧显示中文档位名（原画 / 720P60 / 仅音频），右侧 value 仍是 usher 的
+                // 原始代号（chunked / 720p60 / audio_only）——匹配档位要用代号。
+                items = listOf("自动" to null) + twitchInfo?.variants.orEmpty().map { it.display to it.name },
                 selected = selectedTwitchQuality,
                 onSelect = {
                   selectedTwitchQuality = it
@@ -957,6 +973,7 @@ fun PlayerScreen(
           if (canShowDanmaku && isHorizontalVideo) {
             HubDanmakuPanel(
               messages = danmakuMessages,
+              revision = danmakuRevision,
               enhancedPortrait = isPortraitLayout,
               textScale = appState.danmakuFontScale,
               modifier = Modifier
@@ -1641,6 +1658,10 @@ private fun DanmakuBubble(
 @Composable
 private fun HubDanmakuPanel(
   messages: List<DanmakuMessage>,
+  // 新弹幕投放序号：不能用 keyedDisplay.size 当「来了新弹幕」的判据 ——
+  // 缓冲区满（takeLast(danmakuMax)）后 size 恒为 200，size 不再变化会让
+  // 竖屏弹幕面板永久停止滚动到最新一条（与横屏滚动弹幕同一个坑）。
+  revision: Int = 0,
   enhancedPortrait: Boolean = false,
   textScale: Float = 1f,
   modifier: Modifier = Modifier,
@@ -1670,7 +1691,7 @@ private fun HubDanmakuPanel(
       k to msg
     }
   }
-  LaunchedEffect(keyedDisplay.size) {
+  LaunchedEffect(revision) {
     if (keyedDisplay.isNotEmpty()) listState.scrollToItem(index = 0)
   }
 

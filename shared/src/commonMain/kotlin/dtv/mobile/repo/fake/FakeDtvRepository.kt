@@ -173,7 +173,7 @@ class FakeDtvRepository : DtvRepository {
     )
   }
 
-  override suspend fun fetchTwitchLiveList(gameSlug: String?, cursor: String?, limit: Int): dtv.mobile.repo.TwitchPage {
+  override suspend fun fetchTwitchLiveList(gameSlug: String?, limit: Int, chineseOnly: Boolean): dtv.mobile.repo.TwitchPage {
     return dtv.mobile.repo.TwitchPage(
       items = fakeRooms(platform = Platform.Twitch, start = 0, count = limit),
       cursor = null,

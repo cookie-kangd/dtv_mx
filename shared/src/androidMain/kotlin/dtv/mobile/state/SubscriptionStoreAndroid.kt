@@ -168,4 +168,11 @@ class SubscriptionStoreAndroid(
     val raw = json.encodeToString(ListSerializer(String.serializer()), items)
     prefs.edit().putString("platform_disabled", raw).apply()
   }
+
+  // 海外平台（Twitch）推荐只看中文，默认开启（历史用户读到默认值 true）。
+  override fun loadTwitchChineseOnly(): Boolean = prefs.getBoolean("twitch_chinese_only", true)
+
+  override fun saveTwitchChineseOnly(value: Boolean) {
+    prefs.edit().putBoolean("twitch_chinese_only", value).apply()
+  }
 }

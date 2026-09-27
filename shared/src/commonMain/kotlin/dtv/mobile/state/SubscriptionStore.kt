@@ -70,6 +70,12 @@ interface SubscriptionStore {
 
   fun loadPlatformDisabled(): List<String>
   fun savePlatformDisabled(items: List<String>)
+
+  // 海外平台（Twitch）推荐只看中文：默认开启。
+  // 开启后「推荐」列表只取中文（ZH）频道并按中文观众常看的板块聚合，
+  // 与网页版中文推荐流一致；关闭则回到全语言人气总榜。
+  fun loadTwitchChineseOnly(): Boolean
+  fun saveTwitchChineseOnly(value: Boolean)
 }
 
 object InMemorySubscriptionStore : SubscriptionStore {
@@ -91,6 +97,7 @@ object InMemorySubscriptionStore : SubscriptionStore {
   private var highRefreshEnabled: Boolean = true
   private var platformOrder: List<String> = emptyList()
   private var platformDisabled: List<String> = emptyList()
+  private var twitchChineseOnly: Boolean = true
 
   override fun loadThemeMode(): ThemeMode = themeMode
 
@@ -198,5 +205,11 @@ object InMemorySubscriptionStore : SubscriptionStore {
 
   override fun savePlatformDisabled(items: List<String>) {
     platformDisabled = items.toList()
+  }
+
+  override fun loadTwitchChineseOnly(): Boolean = twitchChineseOnly
+
+  override fun saveTwitchChineseOnly(value: Boolean) {
+    twitchChineseOnly = value
   }
 }

@@ -5,7 +5,6 @@ import dtv.mobile.model.Streamer
 import dtv.mobile.net.createHttpClient
 import dtv.mobile.platform.Env6
 import dtv.mobile.repo.TwitchCate
-import dtv.mobile.repo.TwitchPage
 import dtv.mobile.repo.TwitchPlayInfo
 import dtv.mobile.repo.TwitchVariant
 import dtv.mobile.util.AppLog
@@ -24,20 +23,50 @@ import java.util.UUID
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 private const val TAG = "DTV-Twitch"
 
+/** Twitch GQL 本地化语言：让分类名与网页版中文界面一致（Just Chatting → 谈天说地）。 */
+private const val ACCEPT_LANGUAGE = "zh-CN"
+
 // master m3u8 解析用正则：提前编译为常量，避免每次解析都重复编译（解析在切画质时触发）
 private val VIDEO_ATTR_REGEX = Regex("VIDEO=\"([^\"]+)\"")
 private val VARIANT_HEIGHT_REGEX = Regex("(\\d+)p(\\d+)")
+
+/**
+ * Twitch 语言过滤。
+ *
+ * ⚠️ 踩坑记录：`streams(languages: [ZH])` 这种**平铺参数**会被服务端静默忽略——
+ * 传与不传返回的东西一模一样（实测仍是 EN/ES/RU 榜单），看起来"参数生效了"其实没有。
+ * 真正生效的写法是把语言塞进 `options` 对象：`streams(options: {languages: [ZH]})`，
+ * 此时返回的每条 node.language 都是 ZH。
+ *
+ * 另外 Language 枚举里中文只有 `ZH`（没有 ZH-CN / ZH-TW / ZH-HK，传了会直接报
+ * "Value does not exist in Language enum"）。
+ *
+ * 注意 `Query.streams` 与 `Game.streams` 的 options 是**两个不同类型**
+ * （StreamOptions / GameStreamOptions），GraphQL 变量必须声明对应类型，
+ * 否则报 "used in position expecting type GameStreamOptions"。
+ */
+private val ZH_ONLY_OPTIONS: JsonObject = buildJsonObject {
+  put("languages", JsonArray(listOf(JsonPrimitive("ZH"))))
+}
+
+/** 不加任何过滤（全语言），比传 null 更省得踩「可空输入类型」的坑。 */
+private val NO_OPTIONS: JsonObject = buildJsonObject { }
+
+/**
+ * 「推荐」聚合用的补充分类：中文观众最聚集的板块（谈天说地 = Just Chatting、IRL）。
+ * 网页版推荐流里这类内容占比很高，单靠人气总榜会把它们挤掉，故并进来一起按人气重排。
+ */
+private val RECOMMEND_EXTRA_SLUGS = listOf("just-chatting", "irl")
 
 /** usher master m3u8 里的画质代号 -> 展示名 */
 private fun variantDisplayName(raw: String): String = when (raw.lowercase()) {
@@ -63,6 +92,10 @@ class TwitchApiAndroid(
       val resp = client.post(Env6.GQL) {
         header("Client-ID", Env6.CLIENT_ID)
         header("X-Device-Id", deviceId)
+        // Twitch GQL 按 Accept-Language 返回本地化文案：带上中文后
+        // 分类名会变成网页版那套中文（Just Chatting → 谈天说地、IRL → IRL），
+        // 不带则一律英文，与网页版体验不一致。
+        header("Accept-Language", ACCEPT_LANGUAGE)
         contentType(ContentType.Application.Json)
         setBody(body)
       }.bodyAsText()
@@ -97,63 +130,100 @@ class TwitchApiAndroid(
       avatarUrl = broadcaster.str("profileImageURL")?.let(::normalizeHttpUrl),
       coverUrl = node.str("previewImageURL")?.let(::normalizeHttpUrl),
       isLive = true,
+      viewerCount = viewers,
     )
   }
 
+  // ⚠️ 不要再加 `after:$cursor`：匿名 Client-ID 带游标翻页会被服务端
+  // "failed integrity check" 直接拒绝（IntegrityCheckFailed），第二页永远拿不到。
+  // 且 first 上限被限制在 30（>30 报 "argument 'first' value must be between 1 and 30"）。
+  // 因此 Twitch 列表按「单页 30 条」处理，「推荐」用多来源聚合来补足内容量。
   private val streamsQuery = """
-    query(${"$"}first:Int,${"$"}cursor:Cursor){
-      streams(first:${"$"}first,after:${"$"}cursor){
-        edges{ node{ id title viewersCount previewImageURL(width:320,height:180)
+    query(${"$"}first:Int,${"$"}options:StreamOptions){
+      streams(first:${"$"}first,options:${"$"}options){
+        edges{ node{ id title language viewersCount previewImageURL(width:320,height:180)
           game{ displayName slug }
           broadcaster{ login displayName profileImageURL(width:70) } } }
-        pageInfo{ hasNextPage }
       }
     }
   """.trimIndent()
 
   private val gameStreamsQuery = """
-    query(${"$"}slug:String!,${"$"}first:Int,${"$"}cursor:Cursor){
+    query(${"$"}slug:String!,${"$"}first:Int,${"$"}options:GameStreamOptions){
       game(slug:${"$"}slug){
         id displayName
-        streams(first:${"$"}first,after:${"$"}cursor){
-          edges{ node{ id title viewersCount previewImageURL(width:320,height:180)
+        streams(first:${"$"}first,options:${"$"}options){
+          edges{ node{ id title language viewersCount previewImageURL(width:320,height:180)
             game{ displayName slug }
             broadcaster{ login displayName profileImageURL(width:70) } } }
-          pageInfo{ hasNextPage }
         }
       }
     }
   """.trimIndent()
 
-  private fun parseStreams(data: JsonObject?): TwitchPage {
+  private fun parseStreams(data: JsonObject?, zhOnly: Boolean = false): List<Streamer> {
     val conn = data?.obj("streams")
       ?: data?.obj("game")?.obj("streams")
-      ?: return TwitchPage(emptyList(), null, false)
-    val edges = (conn["edges"] as? kotlinx.serialization.json.JsonArray).orEmpty()
-    val items = edges.mapNotNull { e ->
-      (e as? JsonObject)?.obj("node")?.let(::nodeToStreamer)
+      ?: return emptyList()
+    val edges = (conn["edges"] as? JsonArray).orEmpty()
+    return edges.mapNotNull { e ->
+      val node = (e as? JsonObject)?.obj("node") ?: return@mapNotNull null
+      // 服务端按 options.languages 过滤偶有漏网（实测中文「谈天说地」里会混进 1 条 EN），
+      // 客户端按 node.language 再兜一层，保证「只看中文」时列表是干净的。
+      if (zhOnly && node.str("language") != "ZH") return@mapNotNull null
+      nodeToStreamer(node)
     }
-    val cursor = edges.lastOrNull()
-      ?.let { (it as? JsonObject)?.str("cursor") }
-    val hasNext = conn.obj("pageInfo")?.str("hasNextPage") == "true"
-    return TwitchPage(items = items, cursor = cursor, hasMore = hasNext && items.isNotEmpty())
   }
 
-  suspend fun fetchTopStreams(cursor: String?, first: Int = 30): TwitchPage {
+  /**
+   * 人气总榜。
+   * @param zhOnly true 时只返回中文（ZH）频道，与网页版中文推荐一致。
+   */
+  suspend fun fetchTopStreams(first: Int = 30, zhOnly: Boolean = false): List<Streamer> {
     val data = gql(streamsQuery, buildJsonObject {
       put("first", first)
-      put("cursor", cursor?.let { JsonPrimitive(it) } ?: JsonNull)
+      put("options", if (zhOnly) ZH_ONLY_OPTIONS else NO_OPTIONS)
     })
-    return parseStreams(data)
+    return parseStreams(data, zhOnly = zhOnly)
   }
 
-  suspend fun fetchGameStreams(slug: String, cursor: String?, first: Int = 30): TwitchPage {
+  /**
+   * 单个分类下的直播列表。
+   *
+   * 默认**不做语言过滤**：用户点进某个具体游戏时想看的是这个游戏最好看的内容，
+   * 强行只留中文会经常出现空列表（很多分类里没有中文主播）；网页版分类页默认也是全语言。
+   * @param zhOnly 仅供「推荐」聚合内部使用，传 true 只取中文频道。
+   */
+  suspend fun fetchGameStreams(slug: String, first: Int = 30, zhOnly: Boolean = false): List<Streamer> {
     val data = gql(gameStreamsQuery, buildJsonObject {
       put("slug", slug)
       put("first", first)
-      put("cursor", cursor?.let { JsonPrimitive(it) } ?: JsonNull)
+      put("options", if (zhOnly) ZH_ONLY_OPTIONS else NO_OPTIONS)
     })
-    return parseStreams(data)
+    return parseStreams(data, zhOnly = zhOnly)
+  }
+
+  /**
+   * 「推荐」列表。
+   *
+   * zhOnly = true 时把「中文人气总榜 + 中文谈天说地 + 中文IRL」三路并发拉取后
+   * 去重、按观众数重排。原因：匿名接口单页最多 30 条且游标翻页被拒，
+   * 单路只有 30 条、内容很单薄；三路合并后最多 90 条，且天然带上了
+   * 中文观众最常看的谈天说地/IRL 内容，观感更接近网页版推荐流。
+   */
+  suspend fun fetchRecommendedStreams(first: Int = 30, zhOnly: Boolean = true): List<Streamer> {
+    if (!zhOnly) return fetchTopStreams(first = first, zhOnly = false)
+    val merged = coroutineScope {
+      val topDeferred = async { runCatching { fetchTopStreams(first = first, zhOnly = true) }.getOrDefault(emptyList()) }
+      val extraDeferred = RECOMMEND_EXTRA_SLUGS.map { slug ->
+        async { runCatching { fetchGameStreams(slug = slug, first = first, zhOnly = true) }.getOrDefault(emptyList()) }
+      }
+      topDeferred.await() + extraDeferred.flatMap { it.await() }
+    }
+    val seen = HashSet<String>(merged.size)
+    return merged
+      .filter { it.roomId.isNotEmpty() && seen.add(it.roomId) }
+      .sortedByDescending { it.viewerCount ?: 0L }
   }
 
   suspend fun fetchCategories(first: Int = 40): List<TwitchCate> {
@@ -189,7 +259,7 @@ class TwitchApiAndroid(
                 stream{ id title viewersCount previewImageURL(width:320,height:180) game{ displayName } } } }
             }
           }
-        """.trimIndent(), buildJsonObject { put("q", keyword) })
+        """.trimIndent(), buildJsonObject { put("q", trimmed) })
       }
       exactDeferred.await() to dataDeferred.await()
     }
@@ -266,9 +336,10 @@ class TwitchApiAndroid(
 
   /** 拉 master m3u8 并解析全部画质变体（含仅音频）。 */
   suspend fun fetchPlayInfo(login: String): TwitchPlayInfo {
-    val masterUrl = buildUsherUrl(login)
+    // buildUsherUrl 内部要先请求一次播放凭据，属于网络调用，
+    // 必须一起纳入 runCatching，否则凭据失败会抛出原始异常、绕过下面的统一文案。
     val text = runCatching {
-      client.get(masterUrl) { header("Referer", Env6.HOST + "/") }.bodyAsText()
+      client.get(buildUsherUrl(login)) { header("Referer", Env6.HOST + "/") }.bodyAsText()
     }.getOrElse { e ->
       AppLog.e(TAG, "fetch master m3u8 failed login=$login", e)
       error("获取 Twitch 画质列表失败")
@@ -284,8 +355,11 @@ class TwitchApiAndroid(
    * 否则匹配 master 里的对应变体直链。
    */
   suspend fun resolveStreamUrl(login: String, quality: String? = null): String {
-    if (quality.isNullOrBlank()) return buildUsherUrl(login)
-    val masterUrl = buildUsherUrl(login)
+    val masterUrl = runCatching { buildUsherUrl(login) }.getOrElse { e ->
+      AppLog.e(TAG, "fetch playback token failed login=$login", e)
+      error("获取 Twitch 播放地址失败")
+    }
+    if (quality.isNullOrBlank()) return masterUrl
     val text = runCatching {
       client.get(masterUrl) { header("Referer", Env6.HOST + "/") }.bodyAsText()
     }.getOrElse { e ->
@@ -294,7 +368,11 @@ class TwitchApiAndroid(
     }
     val variants = parseMasterPlaylist(text)
     val matched = variants.firstOrNull { it.name.equals(quality, ignoreCase = true) }
-      ?: variants.firstOrNull()
+      ?: variants.firstOrNull()?.also {
+        // 主播中途换档/换设备时旧档位会消失，这里回落到最高档并留一条日志，
+        // 免得用户以为「选了 720P 却播了别的档」而找不到原因。
+        AppLog.w(TAG, "quality $quality missing for $login, fallback to ${it.name}")
+      }
       ?: error("该频道未返回可用画质")
     return matched.url
   }

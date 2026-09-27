@@ -1190,6 +1190,27 @@ private fun BasicSettingsSection(
       }
     }
 
+    // 海外平台推荐只看中文（默认开启）
+    SettingsCard {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Text("推荐只看中文", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+          Text(
+            text = "海外平台（Twitch）的「推荐」列表只显示中文频道，并把中文观众常看的「谈天说地 / IRL」一并聚合进来，与网页版中文推荐流一致；关闭则回到全语言人气总榜。点进具体分类时不受此开关影响。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+          )
+        }
+        Switch(
+          checked = appState.twitchChineseOnly,
+          onCheckedChange = appState::updateTwitchChineseOnly,
+        )
+      }
+    }
+
     // 屏幕刷新率（默认开启 = 最高刷新率）
     SettingsCard {
       Row(

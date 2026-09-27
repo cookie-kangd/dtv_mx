@@ -2,6 +2,7 @@ package dtv.mobile.platform.twitch
 
 import dtv.mobile.platform.Env6
 import dtv.mobile.repo.DanmakuMessage
+import dtv.mobile.util.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.awaitClose
@@ -28,6 +29,9 @@ private val DISPLAY_NAME_REGEX = Regex("display-name=([^;]*)")
 private val NICK_REGEX = Regex("nick=([^;\\s]+)")
 private val COLOR_REGEX = Regex("color=([^;]*)")
 
+private const val TAG = "DTV-Twitch-IRC"
+
+
 class TwitchDanmakuClientAndroid(
   private val okHttp: OkHttpClient = OkHttpClient(),
 ) {
@@ -38,11 +42,16 @@ class TwitchDanmakuClientAndroid(
       while (isActive) {
         val done = CompletableDeferred<Unit>()
         var socket: WebSocket? = null
+        // 本次连接是否成功建立过：OkHttp 的回调在它自己的线程上跑，用原子量保证可见性。
+        // 退避策略：成功连上过 → 断开后立刻用最短间隔重连（不掉线观感）；
+        // 连续失败（一次都没连上）→ 指数退避，避免疯狂重试。
+        val connected = java.util.concurrent.atomic.AtomicBoolean(false)
         try {
           val req = Request.Builder().url(Env6.DANMU_WS).build()
           val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
               socket = webSocket
+              connected.set(true)
               webSocket.send("CAP REQ :twitch.tv/tags twitch.tv/commands")
               webSocket.send("NICK justinfan${(10_000..99_999).random()}")
               webSocket.send("JOIN #$channel")
@@ -89,6 +98,8 @@ class TwitchDanmakuClientAndroid(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+              // 不再静默吞掉：弹幕空白时至少能从日志看出是连不上还是被拒。
+              AppLog.w(TAG, "twitch irc 连接失败 channel=$channel code=${response?.code}", t)
               done.complete(Unit)
             }
           }
@@ -98,12 +109,12 @@ class TwitchDanmakuClientAndroid(
         } catch (ce: CancellationException) {
           throw ce
         } catch (t: Throwable) {
-          // ignore and retry
+          AppLog.w(TAG, "twitch irc 会话异常 channel=$channel", t)
         } finally {
           socket?.cancel()
         }
         delay(backoff)
-        backoff = min(backoff * 2, 30_000L)
+        backoff = if (connected.get()) 1_000L else min(backoff * 2, 30_000L)
       }
     }
 

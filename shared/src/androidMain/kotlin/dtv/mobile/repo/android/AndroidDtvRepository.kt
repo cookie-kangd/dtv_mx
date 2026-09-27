@@ -770,16 +770,25 @@ class AndroidDtvRepository(
     }
   }
 
-  override suspend fun fetchTwitchLiveList(gameSlug: String?, cursor: String?, limit: Int): TwitchPage {
+  override suspend fun fetchTwitchLiveList(
+    gameSlug: String?,
+    limit: Int,
+    chineseOnly: Boolean,
+  ): TwitchPage {
     return withContext(Dispatchers.IO) {
       runCatching {
         if (gameSlug.isNullOrBlank()) {
-          twitchApi.fetchTopStreams(cursor = cursor, first = limit)
+          // 「推荐」：chineseOnly 时聚合中文人气总榜 + 中文谈天说地 + 中文IRL
+          val items = twitchApi.fetchRecommendedStreams(first = limit, zhOnly = chineseOnly)
+          TwitchPage(items = items, cursor = null, hasMore = false)
         } else {
-          twitchApi.fetchGameStreams(slug = gameSlug, cursor = cursor, first = limit)
+          // 分类列表不做语言过滤（用户点进某个游戏时想看的是这个游戏最好看的内容，
+          // 强行只留中文经常是空列表），与网页版分类页默认行为一致。
+          val items = twitchApi.fetchGameStreams(slug = gameSlug, first = limit)
+          TwitchPage(items = items, cursor = null, hasMore = false)
         }
       }.getOrElse { err ->
-        AppLog.e("DTV-Twitch", "fetch live list failed slug=$gameSlug cursor=$cursor", err)
+        AppLog.e("DTV-Twitch", "fetch live list failed slug=$gameSlug", err)
         TwitchPage(items = emptyList(), cursor = null, hasMore = false)
       }
     }

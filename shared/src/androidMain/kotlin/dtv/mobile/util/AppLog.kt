@@ -14,6 +14,18 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
+/**
+ * 日志时间戳格式化器。
+ *
+ * SimpleDateFormat 既非线程安全、构造开销又不小；appendRaw 会被主线程、
+ * WebSocket 接收线程、后台任务线程等各种调用方直接使用，因此按线程各持一份复用
+ * （每条日志原本都要 new 一个 Formatter，高频日志下是笔可观的浪费）。
+ */
+private val DATE_FORMAT: ThreadLocal<SimpleDateFormat> =
+  object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+  }
+
 object AppLog {
   private val lock = Any()
   @Volatile private var file: File? = null
@@ -116,7 +128,7 @@ object AppLog {
 
   private fun appendRaw(level: String, tag: String, message: String, t: Throwable?) {
     val f = file ?: return
-    val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+    val now = DATE_FORMAT.get().format(Date())
     val line = buildString {
       append(now)
       append(" [")

@@ -50,6 +50,8 @@ class AppState(
   var landscapeEnabled: Boolean by mutableStateOf(false)
   var exitCleanupEnabled: Boolean by mutableStateOf(true)
   var highRefreshEnabled: Boolean by mutableStateOf(true)
+  /** 海外平台（Twitch）「推荐」只看中文频道，默认开启。 */
+  var twitchChineseOnly: Boolean by mutableStateOf(true)
   var accentColorHex: String by mutableStateOf("")
   var platformSwitchLoading: Boolean by mutableStateOf(false)
   var selectedPlatform: Platform by mutableStateOf(Platform.Douyu)
@@ -110,6 +112,7 @@ class AppState(
     landscapeEnabled = subscriptionStore.loadLandscapeEnabled()
     exitCleanupEnabled = subscriptionStore.loadExitCleanupEnabled()
     highRefreshEnabled = subscriptionStore.loadHighRefreshEnabled()
+    twitchChineseOnly = subscriptionStore.loadTwitchChineseOnly()
     accentColorHex = subscriptionStore.loadAccentColorHex()
     platformOrder = loadPlatformOrder()
     platformDisabled = loadPlatformDisabled()
@@ -227,6 +230,11 @@ class AppState(
   fun updateHighRefreshEnabled(enabled: Boolean) {
     highRefreshEnabled = enabled
     subscriptionStore.saveHighRefreshEnabled(enabled)
+  }
+
+  fun updateTwitchChineseOnly(enabled: Boolean) {
+    twitchChineseOnly = enabled
+    subscriptionStore.saveTwitchChineseOnly(enabled)
   }
 
   private fun loadPlatformOrder(): List<Platform> {

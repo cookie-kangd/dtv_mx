@@ -56,7 +56,9 @@ kotlin {
         implementation("androidx.core:core-ktx:1.15.0")
         implementation("androidx.activity:activity-compose:1.10.1")
 
-        val media3Version = "1.10.1"
+        // 1.11.1：纯 Java 库（无 Kotlin metadata 约束），minCompileSdk=36 与本工程一致，
+        // 直接可用；主要收益是 HLS 播放与缓冲策略的缺陷修复。
+        val media3Version = "1.11.1"
         implementation("androidx.media3:media3-exoplayer:$media3Version")
         implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
         implementation("androidx.media3:media3-datasource:$media3Version")

@@ -148,7 +148,17 @@ interface DtvRepository {
 
   suspend fun fetchTwitchCategories(): List<TwitchCate>
 
-  suspend fun fetchTwitchLiveList(gameSlug: String?, cursor: String?, limit: Int): TwitchPage
+  /**
+   * Twitch 直播列表。
+   *
+   * 没有 cursor 参数：匿名 GQL 客户端带游标翻页会被服务端 integrity check 拒绝，
+   * 第二页永远拿不到（详见 TwitchApiAndroid 的注释），因此 Twitch 固定为单页。
+   *
+   * @param gameSlug null = 「推荐」；非 null = 该分类下的直播
+   * @param chineseOnly 仅对「推荐」生效：true 时只取中文（ZH）频道，
+   *   并按「中文人气总榜 + 中文谈天说地 + 中文IRL」聚合，行为对齐网页版中文推荐
+   */
+  suspend fun fetchTwitchLiveList(gameSlug: String?, limit: Int, chineseOnly: Boolean): TwitchPage
 
   suspend fun searchTwitchChannels(keyword: String): List<Streamer>
 
