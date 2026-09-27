@@ -2,6 +2,7 @@ package dtv.mobile.platform.douyu
 import dtv.mobile.platform.Env1
 
 import dtv.mobile.repo.DanmakuMessage
+import dtv.mobile.util.AppLog
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -127,7 +128,8 @@ class DouyuDanmakuClientAndroid(
         } catch (ce: CancellationException) {
           throw ce
         } catch (t: Throwable) {
-          // ignore
+          // 不再静默吞掉：弹幕空白时至少能从日志判断是连不上、被拒还是解析失败。
+          AppLog.w("DTV-Douyu-Danmaku", "douyu 弹幕会话异常 roomId=$roomId", t)
         } finally {
           heartbeatJob?.cancel()
           socket?.cancel()

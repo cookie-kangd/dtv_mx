@@ -150,6 +150,10 @@ class AndroidUpdateManager(
               body.byteStream().use { input ->
                 val buffer = ByteArray(16 * 1024)
                 var downloaded = 0L
+                // 每 16KB 就切一次主线程：50MB 的包约 3000 次线程切换，
+                // 主线程被进度刷新占满，下载时界面会明显卡顿。
+                // 按时间节流（120ms）+ 结束时强制刷新一次即可。
+                var lastEmitMs = 0L
                 while (true) {
                   // 响应取消：写循环里定期检查，让「停止下载」即时生效
                   ensureActive()
@@ -159,7 +163,11 @@ class AndroidUpdateManager(
                   downloaded += read
                   if (total > 0) {
                     val progress = (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-                    withContext(Dispatchers.Main.immediate) { state = UpdateState.Downloading(progress) }
+                    val now = System.currentTimeMillis()
+                    if (now - lastEmitMs >= 120L || progress >= 1f) {
+                      lastEmitMs = now
+                      withContext(Dispatchers.Main.immediate) { state = UpdateState.Downloading(progress) }
+                    }
                   }
                 }
               }

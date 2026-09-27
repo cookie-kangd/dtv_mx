@@ -42,6 +42,7 @@ import dtv.mobile.ui.components.LocalCardMetrics
 import dtv.mobile.ui.components.PullToRefreshBox
 import dtv.mobile.ui.components.StreamerCard
 import dtv.mobile.ui.components.StreamerCardSkeleton
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /** 平台首页分类胶囊条的单个条目；key 需在当前列表内唯一且稳定（用于 LazyRow 复用）。 */
@@ -104,9 +105,13 @@ fun PlatformHomeContent(
     }
     snapshotFlow {
       pillListState.firstVisibleItemIndex to pillListState.firstVisibleItemScrollOffset
-    }.collect { (index, offset) ->
-      appState.savePillScrollPosition(pillPlatformKey, index, offset)
     }
+      // 缺 distinctUntilChanged 时每滚动一帧都会分配一个 Pair 并写一次存储，
+      // 加去重后只在滚动位置真的变化时才写。
+      .distinctUntilChanged()
+      .collect { (index, offset) ->
+        appState.savePillScrollPosition(pillPlatformKey, index, offset)
+      }
   }
 
   LazyGridLoadMoreEffect(

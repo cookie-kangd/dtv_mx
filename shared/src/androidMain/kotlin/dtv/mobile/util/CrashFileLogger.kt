@@ -94,8 +94,19 @@ object CrashFileLogger {
     val f = File(path)
     if (!f.isFile) return
 
-    val lines = runCatching { f.readLines() }.getOrNull() ?: return
-    val tail = if (lines.size <= maxLines) lines else lines.takeLast(maxLines)
+    // 原来是 f.readLines() —— 把整个日志读进内存只为取最后 250 行。
+    // 日志能长到几 MB，而崩溃恰恰是最容易 OOM 的时机（崩溃记录自己就写不出来）。
+    // 改成环形缓冲，内存里始终只留 maxLines 行。
+    val tail = ArrayDeque<String>(maxLines)
+    val read = runCatching {
+      f.bufferedReader().useLines { seq ->
+        seq.forEach { line ->
+          if (tail.size >= maxLines) tail.removeFirst()
+          tail.addLast(line)
+        }
+      }
+    }.isSuccess
+    if (!read) return
     out.append("\n--- tail of dtv log (last ")
     out.append(tail.size.toString())
     out.append(" lines) ---\n")

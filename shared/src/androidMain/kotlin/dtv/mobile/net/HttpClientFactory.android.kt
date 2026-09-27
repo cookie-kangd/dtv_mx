@@ -27,7 +27,11 @@ actual fun createHttpClient(): HttpClient {
           AppLog.d("DTV-HTTP", message)
         }
       }
-      level = LogLevel.HEADERS
+      // 只记请求/响应行（URL + 状态码），不再记 HEADERS：
+      // 头信息量大约是正文的 10 倍以上，每个请求都要进日志队列再落盘，
+      // 刷首页时几十个请求会明显拖慢 IO 并让日志文件快速膨胀；
+      // 排查问题看 URL 和状态码已经够用。
+      level = LogLevel.INFO
     }
     install(ContentNegotiation) {
       json(

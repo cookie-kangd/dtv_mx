@@ -137,7 +137,9 @@ fun HomeStreamerCard(
             contentAlignment = Alignment.Center,
           ) {
             Text(
-              text = formatViewerCountWanIfNeeded(streamer.viewerText),
+              text = remember(streamer.viewerText) {
+                formatViewerCountWanIfNeeded(streamer.viewerText)
+              },
               style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black, fontSize = metrics.viewerSize),
               color = Color.White,
               maxLines = 1,

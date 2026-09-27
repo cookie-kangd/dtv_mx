@@ -380,7 +380,7 @@ class TwitchApiAndroid(
   private suspend fun buildUsherUrl(login: String): String {
     val (token, sig) = fetchPlaybackToken(login)
     return "${Env6.USHER}$login.m3u8" +
-      "?token=${token.encodeURLParameter()}&sig=$sig" +
+      "?token=${token.encodeURLParameter()}&sig=${sig.encodeURLParameter()}" +
       "&allow_source=true&allow_audio_only=true&platform=web&player=site"
   }
 

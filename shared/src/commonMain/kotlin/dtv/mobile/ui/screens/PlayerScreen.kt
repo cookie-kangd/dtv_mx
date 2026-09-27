@@ -1692,7 +1692,12 @@ private fun HubDanmakuPanel(
     }
   }
   LaunchedEffect(revision) {
-    if (keyedDisplay.isNotEmpty()) listState.scrollToItem(index = 0)
+    // 只有用户正贴着顶部（最新一条）时才自动跟到最新：
+    // 之前无条件 scrollToItem(0)，用户往上翻历史弹幕会被每来一批新弹幕就拽回底部，
+    // 竖屏面板里的历史弹幕根本没法看。
+    if (keyedDisplay.isNotEmpty() && !listState.canScrollBackward) {
+      listState.scrollToItem(index = 0)
+    }
   }
 
   LazyColumn(
@@ -1834,6 +1839,8 @@ private fun ScrollingDanmakuOverlay(
     val trackCount = (usableHeightPx / trackStepPx).toInt().coerceIn(1, 24)
     val active = remember(resetKey, trackCount) { mutableStateListOf<Active>() }
     val laneAvailableAt = remember(resetKey, trackCount) { MutableList(trackCount) { 0L } }
+    // 弹幕 key 的自增序号：随轨道数一起重置即可，保证同一批次内不会撞 key。
+    val activeIdSeq = remember(resetKey, trackCount) { longArrayOf(0L) }
 
     fun estimatedTextWidthPx(user: String, content: String): Float {
       val text = if (showUser) "$user  $content" else content
@@ -1875,9 +1882,14 @@ private fun ScrollingDanmakuOverlay(
           val track = chooseTrack(now)
           if (track != null) {
             if (active.size >= maxActive) active.removeAt(0)
+            // 不能用 System.nanoTime() 当 key：同一帧里连续投放多条弹幕时，
+            // 部分设备的时钟分辨率不足会返回相同值，重复 key 会让 Compose
+            // 直接抛 "Key was already used" 崩溃。改用单调递增计数器保证唯一。
+            val nextId = activeIdSeq[0] + 1L
+            activeIdSeq[0] = nextId
             active.add(
               Active(
-                id = System.nanoTime(),
+                id = nextId,
                 user = user,
                 content = content,
                 track = track,
@@ -1980,7 +1992,11 @@ private fun RowWrap(
   onSelect: (String?) -> Unit,
 ) {
   LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    items(items, key = { it.first }) { (label, value) ->
+    // 用下标当 key 而不是标签文本：画质/线路可能出现同名档位（如 usher 返回两个
+    // 720P 变体），重复 key 会让 LazyLayout 直接抛 "Key was already used" 崩溃。
+    // 这类 chip 列表条目固定、不会重排，用 index 做 key 既唯一又稳定。
+    items(items.size, key = { it }) { index ->
+      val (label, value) = items[index]
       val isSelected = value == selected || (value == null && selected == null)
       FilterChip(
         selected = isSelected,
@@ -1998,7 +2014,11 @@ private fun RowWrapInt(
   onSelect: (Int?) -> Unit,
 ) {
   LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    items(items, key = { it.first }) { (label, value) ->
+    // 用下标当 key 而不是标签文本：画质/线路可能出现同名档位（如 usher 返回两个
+    // 720P 变体），重复 key 会让 LazyLayout 直接抛 "Key was already used" 崩溃。
+    // 这类 chip 列表条目固定、不会重排，用 index 做 key 既唯一又稳定。
+    items(items.size, key = { it }) { index ->
+      val (label, value) = items[index]
       val isSelected = value == selected || (value == null && selected == null)
       FilterChip(
         selected = isSelected,
@@ -2016,7 +2036,8 @@ private fun RowWrapFloat(
   onSelect: (Float) -> Unit,
 ) {
   LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    items(items, key = { it.first }) { (label, value) ->
+    items(items.size, key = { it }) { index ->
+      val (label, value) = items[index]
       val isSelected = (value - selected).let { if (it < 0f) -it else it } < 0.0001f
       FilterChip(
         selected = isSelected,
@@ -2088,9 +2109,14 @@ private suspend fun resolveDouyinWithFallback(
   webRid: String,
   preferred: String,
 ): Pair<String, String> {
-  val start = DOUYIN_QUALITY_ASC.indexOf(preferred).coerceAtLeast(0)
+  // DOUYIN_QUALITY_ASC 是「低 -> 高」升序，降档必须往下标小的方向走。
+  // 原来是 `until size`（往上升）：默认首选 ORIGIN 取到末位，循环只跑一次就结束，
+  // 等于完全没有降档 —— 原画需要权限而未授权时直接抛错、根本进不去房间。
+  // 首选档位不在列表里时，从最高档开始往下试（而不是落到最低档）。
+  val start = DOUYIN_QUALITY_ASC.indexOf(preferred)
+    .let { if (it >= 0) it else DOUYIN_QUALITY_ASC.lastIndex }
   var lastErr: Throwable? = null
-  for (i in start until DOUYIN_QUALITY_ASC.size) {
+  for (i in start downTo 0) {
     val q = DOUYIN_QUALITY_ASC[i]
     runCatching { repo.resolveDouyinStreamUrl(webRid = webRid, desiredQuality = q) }
       .onSuccess { return it to q }
@@ -2108,9 +2134,13 @@ private suspend fun resolveBilibiliWithFallback(
   roomId: String,
   preferred: Int,
 ): Pair<String, Int> {
-  val start = BILIBILI_QN_ASC.indexOf(preferred).coerceAtLeast(0)
+  // 同抖音：BILIBILI_QN_ASC 是「低 -> 高」升序（80,150,250,400,10000），
+  // 降到低档要往下标小的方向走。原写法在默认的 10000（原画）上只试一档，
+  // 未登录/非大会员时原画不可用就直接失败，「自动降到蓝光」这句注释从未生效。
+  val start = BILIBILI_QN_ASC.indexOf(preferred)
+    .let { if (it >= 0) it else BILIBILI_QN_ASC.lastIndex }
   var lastErr: Throwable? = null
-  for (i in start until BILIBILI_QN_ASC.size) {
+  for (i in start downTo 0) {
     val qn = BILIBILI_QN_ASC[i]
     runCatching { repo.resolveBilibiliStreamUrl(roomId = roomId, qn = qn) }
       .onSuccess { return it to qn }

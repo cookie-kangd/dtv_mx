@@ -140,13 +140,14 @@ class HuyaDanmakuClientAndroid(
                     )
                     try {
                       session.send(Frame.Binary(fin = true, data = wsInfo.registerPayload))
-                    } catch (_: Throwable) {
-                      // ignore
+                    } catch (t: Throwable) {
+                      // 发不出去说明连接已死，记一条日志，弹幕空白时才有线索可查
+                      AppLog.w("DTV-Huya", "huya danmaku re-subscribe failed roomId=$roomId", t)
                     }
                     try {
                       session.send(Frame.Binary(fin = true, data = HEARTBEAT))
-                    } catch (_: Throwable) {
-                      // ignore
+                    } catch (t: Throwable) {
+                      AppLog.w("DTV-Huya", "huya danmaku heartbeat send failed roomId=$roomId", t)
                     }
                     continue
                   }

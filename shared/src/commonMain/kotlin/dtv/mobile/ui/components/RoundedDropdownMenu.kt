@@ -86,7 +86,11 @@ fun RoundedDropdownMenu(
   val offsetYpx = with(LocalDensity.current) { offsetY.roundToPx() }
   val density = LocalDensity.current
   val scrollState = rememberScrollState()
-  val itemTops = mutableStateMapOf<Int, Int>()
+  // 必须 remember：写在 remember 外的话每次重组都是新 map，onGloballyPositioned
+  // 写进新实例，而下面 LaunchedEffect 里 snapshotFlow 观察的是首次组合那个旧 map，
+  // containsKey 永远为 false -> .first() 永久挂起（协程还一直挂着不退出），
+  // 「打开菜单自动定位到选中项」彻底失效。
+  val itemTops = remember { mutableStateMapOf<Int, Int>() }
 
   // 打开后自动定位：等首次布局完成（条目位置与最大滚动值就绪），
   // 把选中项滚到视口上部留一点上下文，静默定位不做动画。

@@ -13,6 +13,13 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
+// 分区 id 解析正则：原先写在 for (p in partitions) 循环体内，
+// 每条分区都要重新编译一次（同步几十条分区就是几十次编译）。提到文件级复用。
+private val RE_DOUYU_C2 = Regex("^douyu:c2:(.+)$")
+private val RE_HUYA = Regex("^huya:(.+)$")
+private val RE_BILIBILI = Regex("^bilibili:(\\d+):(\\d+)$")
+private val RE_DOUYIN = Regex("^douyin:([^:]+):(.+)$")
+
 @Serializable
 private data class DesktopFollowedStreamer(
   val id: String,
@@ -397,7 +404,7 @@ private suspend fun exportMobilePartitionsAsDesktopCustomCategories(appState: Ap
   for (p in partitions) {
     when (p.platform) {
       Platform.Douyu -> {
-        val cate2Id = Regex("^douyu:c2:(.+)$").matchEntire(p.id)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val cate2Id = RE_DOUYU_C2.matchEntire(p.id)?.groupValues?.getOrNull(1)?.trim().orEmpty()
         if (cate2Id.isEmpty()) continue
         if (douyuCategories == null) douyuCategories = runCatching { appState.repo.fetchDouyuCategories() }.getOrNull()
         val categories = douyuCategories ?: continue
@@ -417,7 +424,7 @@ private suspend fun exportMobilePartitionsAsDesktopCustomCategories(appState: Ap
         )
       }
       Platform.Huya -> {
-        val gid = Regex("^huya:(.+)$").matchEntire(p.id)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val gid = RE_HUYA.matchEntire(p.id)?.groupValues?.getOrNull(1)?.trim().orEmpty()
         if (gid.isEmpty()) continue
         if (huyaCategories == null) huyaCategories = runCatching { appState.repo.fetchHuyaCategories() }.getOrNull()
         val categories = huyaCategories ?: continue
@@ -436,7 +443,7 @@ private suspend fun exportMobilePartitionsAsDesktopCustomCategories(appState: Ap
         )
       }
       Platform.Bilibili -> {
-        val m = Regex("^bilibili:(\\d+):(\\d+)$").matchEntire(p.id) ?: continue
+        val m = RE_BILIBILI.matchEntire(p.id) ?: continue
         val parentAreaId = m.groupValues[1].toIntOrNull() ?: continue
         val areaId = m.groupValues[2].toIntOrNull() ?: continue
         if (bilibiliCategories == null) bilibiliCategories = runCatching { appState.repo.fetchBilibiliCategories() }.getOrNull()
@@ -459,7 +466,7 @@ private suspend fun exportMobilePartitionsAsDesktopCustomCategories(appState: Ap
         )
       }
       Platform.Douyin -> {
-        val m = Regex("^douyin:([^:]+):(.+)$").matchEntire(p.id) ?: continue
+        val m = RE_DOUYIN.matchEntire(p.id) ?: continue
         val partitionType = m.groupValues[1]
         val partition = m.groupValues[2]
         if (douyinCategories == null) douyinCategories = runCatching { appState.repo.fetchDouyinCategories() }.getOrNull()

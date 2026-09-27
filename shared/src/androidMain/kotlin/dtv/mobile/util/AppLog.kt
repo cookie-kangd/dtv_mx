@@ -85,6 +85,11 @@ object AppLog {
           pendingFlush?.countDown()
         } catch (_: InterruptedException) {
           return@Thread
+        } catch (t: Throwable) {
+          // 只 catch InterruptedException 时，一次 IO 异常就会让写线程直接 return，
+          // 之后所有日志静默丢失且无任何提示（日志是线上排查的唯一手段）。
+          // 非中断类异常吞掉后继续跑，保证写线程存活。
+          runCatching { android.util.Log.w("DTV-AppLog", "log writer error", t) }
         }
       }
     }.apply { name = "dtv-log-writer" }.start()

@@ -22,6 +22,10 @@ class HuyaStreamUrlResolverAndroid(
   private val client: HttpClient,
 ) {
   companion object {
+    // 直播间页面里 stream 块的截取正则：原先在 hasCandidates / parseCandidates
+    // 里各写了一份，每次调用（含每次重试）都要重新编译一次，而且这是 DOTALL 的
+    // .*? 要扫整页 HTML。提到 companion 复用一份。
+    private val STREAM_BLOCK_REGEX = Regex("(?s)stream:\\s*(\\{\"data\".*?),\"iWebDefaultBitRate\"")
     private const val IOS_MOBILE_UA =
       "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
     private const val DESKTOP_UA =
@@ -101,7 +105,7 @@ class HuyaStreamUrlResolverAndroid(
     }
 
     fun hasCandidates(html: String): Boolean {
-      val re = Regex("(?s)stream:\\s*(\\{\"data\".*?),\"iWebDefaultBitRate\"")
+      val re = STREAM_BLOCK_REGEX
       val match = re.find(html) ?: return false
       val jsonStr = match.groupValues[1] + "}"
       val value = runCatching { json.parseToJsonElement(jsonStr).jsonObject }.getOrNull() ?: return false
@@ -190,10 +194,14 @@ class HuyaStreamUrlResolverAndroid(
     }
 
     fun parseCandidates(html: String): List<Pair<String, String>> {
-      val re = Regex("(?s)stream:\\s*(\\{\"data\".*?),\"iWebDefaultBitRate\"")
+      val re = STREAM_BLOCK_REGEX
       val match = re.find(html) ?: return emptyList()
       val jsonStr = match.groupValues[1] + "}"
-      val value = json.parseToJsonElement(jsonStr).jsonObject
+      // 必须 runCatching：同文件 hasCandidates() 做了保护、这里却没有。
+      // 页面结构一变（正则截出的片段不是合法 JSON）就会直接抛异常，
+      // 把整个「解析虎牙画质」流程打断，而不是安静地返回空列表走兜底。
+      val value = runCatching { json.parseToJsonElement(jsonStr).jsonObject }.getOrNull()
+        ?: return emptyList()
       val dataList = value["data"]?.jsonArray ?: return emptyList()
       val first = dataList.firstOrNull()?.jsonObject ?: return emptyList()
       val streamInfoList = first["gameStreamInfoList"]?.jsonArray ?: return emptyList()

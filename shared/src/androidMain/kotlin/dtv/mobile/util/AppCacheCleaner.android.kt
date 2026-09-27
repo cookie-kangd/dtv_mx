@@ -22,7 +22,10 @@ object AppCacheCleaner {
   private fun deleteRecursive(dir: File?) {
     val files = dir?.listFiles() ?: return
     for (f in files) {
-      if (f.isDirectory) deleteRecursive(f) else runCatching { f.delete() }
+      // 原来子目录删完内容后目录本身留着，反复清理会累积一批空目录；
+      // 顶层 cacheDir 保留（进程可能还在用），子目录随内容一起删掉。
+      if (f.isDirectory) deleteRecursive(f)
+      runCatching { f.delete() }
     }
   }
 }

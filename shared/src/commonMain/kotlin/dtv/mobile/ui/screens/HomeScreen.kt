@@ -62,7 +62,9 @@ fun HomeScreen(
   modifier: Modifier = Modifier,
 ) {
   val items = appState.followedStreamers
-  val displayItems = run {
+  // 跟随关注列表变化记忆：原本每次重组都重跑一遍 toList + 两次 filter + 拼接，
+  // 拖动排序时每帧都在做这次 O(n) 拷贝。
+  val displayItems = remember(items) {
     val snapshot = items.toList()
     val live = snapshot.filter { it.isLive }
     val offline = snapshot.filterNot { it.isLive }

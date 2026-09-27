@@ -243,16 +243,22 @@ class BilibiliDanmakuClientAndroid(
 
   private fun inflateZlib(data: ByteArray): ByteArray {
     val inflater = Inflater()
-    inflater.setInput(data)
-    val out = ByteArrayOutputStream()
-    val buf = ByteArray(8 * 1024)
-    while (!inflater.finished() && !inflater.needsInput()) {
-      val n = inflater.inflate(buf)
-      if (n <= 0) break
-      out.write(buf, 0, n)
+    // end() 必须放 finally：inflate() 遇到损坏数据会抛 DataFormatException，
+    // 原来的写法会跳过 end()，Inflater 持有的 native 内存不释放。
+    // 弹幕解压是高频路径，服务端偶发推一包坏数据就会持续泄漏。
+    try {
+      inflater.setInput(data)
+      val out = ByteArrayOutputStream()
+      val buf = ByteArray(8 * 1024)
+      while (!inflater.finished() && !inflater.needsInput()) {
+        val n = inflater.inflate(buf)
+        if (n <= 0) break
+        out.write(buf, 0, n)
+      }
+      return out.toByteArray()
+    } finally {
+      runCatching { inflater.end() }
     }
-    inflater.end()
-    return out.toByteArray()
   }
 
   private fun decodeChatMessageOrNull(packetBody: ByteArray): DanmakuMessage? {
