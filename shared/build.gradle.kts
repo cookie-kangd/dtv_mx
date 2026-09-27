@@ -56,9 +56,12 @@ kotlin {
         implementation("androidx.core:core-ktx:1.15.0")
         implementation("androidx.activity:activity-compose:1.10.1")
 
-        // 1.11.1：纯 Java 库（无 Kotlin metadata 约束），minCompileSdk=36 与本工程一致，
-        // 直接可用；主要收益是 HLS 播放与缓冲策略的缺陷修复。
-        val media3Version = "1.11.1"
+        // 暂不升级：media3-ui 1.11.1 的 Gradle module 元数据里带 kotlin-stdlib:2.2.10，
+        // 而本工程 Kotlin 编译器是 2.0.21，会直接报
+        // "Module was compiled with an incompatible version of Kotlin ... metadata is 2.2.0"。
+        // 1.10.1 依赖的是 kotlin-stdlib:2.0.20，与本工程一致，故锁定 1.10.1。
+        // 结论：media3 想升 1.11.x 必须先整体升级 Kotlin/CMP/AGP 工具链。
+        val media3Version = "1.10.1"
         implementation("androidx.media3:media3-exoplayer:$media3Version")
         implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
         implementation("androidx.media3:media3-datasource:$media3Version")
