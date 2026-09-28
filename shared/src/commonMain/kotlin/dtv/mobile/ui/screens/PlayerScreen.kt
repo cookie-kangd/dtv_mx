@@ -1663,13 +1663,13 @@ private fun DanmakuBubble(
   }
 }
 
-@Composable
 /** 弹幕消息的「身份 key」：equals 按引用（===），hashCode 委托消息自身——同一对象必同桶。 */
 private class MsgRef(val msg: DanmakuMessage) {
   override fun equals(other: Any?): Boolean = other is MsgRef && other.msg === msg
   override fun hashCode(): Int = msg.hashCode()
 }
 
+@Composable
 private fun HubDanmakuPanel(
   messages: List<DanmakuMessage>,
   // 新弹幕投放序号：不能用 keyedDisplay.size 当「来了新弹幕」的判据 ——
