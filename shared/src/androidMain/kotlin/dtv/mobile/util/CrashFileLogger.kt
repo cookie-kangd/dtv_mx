@@ -97,7 +97,9 @@ object CrashFileLogger {
     // 原来是 f.readLines() —— 把整个日志读进内存只为取最后 250 行。
     // 日志能长到几 MB，而崩溃恰恰是最容易 OOM 的时机（崩溃记录自己就写不出来）。
     // 改成环形缓冲，内存里始终只留 maxLines 行。
-    val tail = ArrayDeque<String>(maxLines)
+    // 注意：kotlin.collections.ArrayDeque 没有初始容量构造（那是 java.util 的），
+    // 默认导入的是 Kotlin 版，这里不能传 maxLines。
+    val tail = ArrayDeque<String>()
     val read = runCatching {
       f.bufferedReader().useLines { seq ->
         seq.forEach { line ->
