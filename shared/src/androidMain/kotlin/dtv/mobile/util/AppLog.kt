@@ -34,7 +34,10 @@ object AppLog {
   private class Line(val text: String) : Cmd
   private class Flush(val latch: CountDownLatch) : Cmd
 
-  private val queue = LinkedBlockingQueue<Cmd>()
+  // 有界队列：落盘线程卡死/异常时若无界堆积，极端情况下日志能把内存吃穿。
+  // 入队点用的都是 offer()，队列满时新日志直接丢弃（丢弃优于 OOM），
+  // 正常吞吐下（批量 drainTo 128）队列长度长期为个位数，1024 绰绰有余。
+  private val queue = LinkedBlockingQueue<Cmd>(1024)
   @Volatile private var started = false
 
   fun init(context: Context) {

@@ -71,6 +71,14 @@ class AndroidDtvRepository(
   private val client = createHttpClient()
   private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+  // 资产分类是打包进 APK 的静态 JSON，运行期永不变，解析结果直接内存缓存：
+  // RootScaffold 的 AnimatedContent 切页会整页重建、每次进平台页都重新
+  // readAssetText + 解析几千条目（CPU 尖峰 + 一波临时对象），缓存后只在
+  // 首次进入时解析一次。斗鱼分类走网络（保留每次拉取的刷新语义），不缓存。
+  @Volatile private var huyaCategoriesCache: List<HuyaCate1>? = null
+  @Volatile private var bilibiliCategoriesCache: List<BilibiliCate1>? = null
+  @Volatile private var douyinCategoriesCache: List<DouyinCate1>? = null
+
   private val douyuMobileApi = DouyuMobileApi(client)
   private val douyuCategoriesApi = DouyuCategoriesApi(client)
   private val douyuThreeCateApi = DouyuThreeCateApi(client)
@@ -411,6 +419,7 @@ class AndroidDtvRepository(
   }
 
   override suspend fun fetchHuyaCategories(): List<HuyaCate1> {
+    huyaCategoriesCache?.let { return it }
     return withContext(Dispatchers.IO) {
       runCatching {
         val text = readAssetText("categories/huya_categories.json")
@@ -435,10 +444,12 @@ class AndroidDtvRepository(
           HuyaCate1(name = name, href = href, cate2List = sub)
         }.filter { it.cate2List.isNotEmpty() }
       }.getOrElse { emptyList() }
-    }
+      // 只缓存非空结果：解析偶发失败不该被永久记住
+    }.also { if (it.isNotEmpty()) huyaCategoriesCache = it }
   }
 
   override suspend fun fetchBilibiliCategories(): List<BilibiliCate1> {
+    bilibiliCategoriesCache?.let { return it }
     return withContext(Dispatchers.IO) {
       runCatching {
         val text = readAssetText("categories/bilibili_categories.json")
@@ -469,10 +480,12 @@ class AndroidDtvRepository(
         }.filter { it.cate2List.isNotEmpty() }
         list
       }.getOrElse { emptyList() }
-    }
+      // 只缓存非空结果：解析偶发失败不该被永久记住
+    }.also { if (it.isNotEmpty()) bilibiliCategoriesCache = it }
   }
 
   override suspend fun fetchDouyinCategories(): List<DouyinCate1> {
+    douyinCategoriesCache?.let { return it }
     return withContext(Dispatchers.IO) {
       runCatching {
         val text = readAssetText("categories/douyin_categories.json")
@@ -510,7 +523,8 @@ class AndroidDtvRepository(
           DouyinCate1(name = name, href = href, cate2List = sub)
         }.filter { it.cate2List.isNotEmpty() }
       }.getOrElse { emptyList() }
-    }
+      // 只缓存非空结果：解析偶发失败不该被永久记住
+    }.also { if (it.isNotEmpty()) douyinCategoriesCache = it }
   }
 
   override suspend fun fetchDouyuCategories(): DouyuCategories {

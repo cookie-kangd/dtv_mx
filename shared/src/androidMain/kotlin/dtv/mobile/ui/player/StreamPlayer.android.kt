@@ -359,21 +359,32 @@ actual fun StreamPlayer(
         }
       },
       update = { view ->
-        view.resizeMode = if (zoomToFill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+        // 先判断是否真的有变化：播放页每 120ms 弹幕批就会重组一次，
+        // 无条件的 requestLayout+invalidate 会让播放视图整帧白做一次
+        // 测量/布局/重绘（CPU 白烧）。仅在画质档位（resizeMode）、
+        // 听播开关（keepScreenOn）、播放器实例任一变化时才触发。
+        val targetResizeMode =
+          if (zoomToFill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+        val targetKeepScreenOn = !backgroundAudio
+        val targetPlayer: Player? = if (backgroundAudio) null else player
+        val changed = view.resizeMode != targetResizeMode ||
+          view.keepScreenOn != targetKeepScreenOn ||
+          view.player !== targetPlayer
+
+        view.resizeMode = targetResizeMode
         view.useController = false
         view.controllerAutoShow = false
         // 听播时允许熄屏（画面已摘除，屏幕常亮毫无意义）
-        view.keepScreenOn = !backgroundAudio
-        val target: Player? = if (backgroundAudio) null else player
-        if (view.player !== target) {
-          view.player = target
-          if (target == null) {
+        view.keepScreenOn = targetKeepScreenOn
+        if (view.player !== targetPlayer) {
+          view.player = targetPlayer
+          if (targetPlayer == null) {
             // 显式清掉播放器上的输出 surface：视频解码停止出画面，
             // 音频与网络连接保持原样（不重连直播流）。
             runCatching { player.clearVideoSurface() }
           }
         }
-        if (target != null) {
+        if (changed && targetPlayer != null) {
           view.post {
             view.requestLayout()
             view.invalidate()

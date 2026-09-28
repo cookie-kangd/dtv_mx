@@ -362,18 +362,6 @@ private fun PlatformLoginSection(
   }
 }
 
-/**
- * 上一次发布的版本号与更新内容（「关于」页展示用）。
- * ⚠️ 每次发新版时手动同步更新：把旧值换成「这次发版前的版本」，
- * 当前版本则由 UpdateManager 动态读取，无需维护。
- */
-private const val LAST_RELEASE_VERSION = "0.2.10"
-private val LAST_RELEASE_NOTES = listOf(
-  "顶栏下拉菜单打开时自动定位到当前选中项",
-  "分类胶囊条滚动位置在看播返回后恢复更可靠",
-  "海外平台搜索合并精确直查，搜频道名必出结果",
-).joinToString("\n") { "· $it" }
-
 @Composable
 private fun AboutSection(
   appState: AppState,
@@ -467,26 +455,6 @@ private fun AboutSection(
 
     // 检查更新（原设置根页入口移到这里）
     UpdateCheckerCard()
-
-    // 上次更新：上一次版本号 + 更新内容
-    SettingsCard {
-      Text(
-        "上次更新",
-        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-      )
-      Spacer(modifier = Modifier.height(4.dp))
-      Text(
-        text = "v$LAST_RELEASE_VERSION",
-        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-        color = MaterialTheme.colorScheme.primary,
-      )
-      Spacer(modifier = Modifier.height(4.dp))
-      Text(
-        text = LAST_RELEASE_NOTES,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-      )
-    }
 
     // 底部版本脚注
     Text(

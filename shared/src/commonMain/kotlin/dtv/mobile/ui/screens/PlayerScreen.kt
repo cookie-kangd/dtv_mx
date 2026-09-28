@@ -68,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -1089,28 +1090,35 @@ private fun PlayerBackground(
       .then(if (fullscreen) Modifier.background(Color.Black) else Modifier),
   ) {
     if (!fullscreen) {
-      Canvas(modifier = Modifier.fillMaxSize()) {
-        drawRect(
-          brush = Brush.linearGradient(
-            colors = listOf(
-              bg,
-              accent.copy(alpha = if (isDark) 0.05f else 0.10f),
-              bg,
-            ),
-            start = Offset(0f, 0f),
-            end = Offset(size.width, size.height),
-          ),
-        )
-        drawCircle(
-          brush = Brush.radialGradient(
-            colors = listOf(accent.copy(alpha = if (isDark) 0.08f else 0.12f), Color.Transparent),
-            center = Offset(size.width * 0.80f, size.height * 0.18f),
-            radius = size.width * 0.70f,
-          ),
-          radius = size.width * 0.70f,
-          center = Offset(size.width * 0.80f, size.height * 0.18f),
-        )
-      }
+      // 静态渐变背景：Brush 在 drawWithCache 里按尺寸/配色缓存，
+      // 之前 Canvas 的 draw lambda 每次执行都新建两个 Brush + 两个 alpha 拷贝
+      // （播放页每 120ms 弹幕批就会让整页失效重画一次）。
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .drawWithCache {
+            val linear = Brush.linearGradient(
+              colors = listOf(
+                bg,
+                accent.copy(alpha = if (isDark) 0.05f else 0.10f),
+                bg,
+              ),
+              start = Offset(0f, 0f),
+              end = Offset(size.width, size.height),
+            )
+            val circleCenter = Offset(size.width * 0.80f, size.height * 0.18f)
+            val circleRadius = size.width * 0.70f
+            val radial = Brush.radialGradient(
+              colors = listOf(accent.copy(alpha = if (isDark) 0.08f else 0.12f), Color.Transparent),
+              center = circleCenter,
+              radius = circleRadius,
+            )
+            onDrawBehind {
+              drawRect(brush = linear)
+              drawCircle(brush = radial, radius = circleRadius, center = circleCenter)
+            }
+          },
+      )
     }
     content()
   }
@@ -1656,6 +1664,12 @@ private fun DanmakuBubble(
 }
 
 @Composable
+/** 弹幕消息的「身份 key」：equals 按引用（===），hashCode 委托消息自身——同一对象必同桶。 */
+private class MsgRef(val msg: DanmakuMessage) {
+  override fun equals(other: Any?): Boolean = other is MsgRef && other.msg === msg
+  override fun hashCode(): Int = msg.hashCode()
+}
+
 private fun HubDanmakuPanel(
   messages: List<DanmakuMessage>,
   // 新弹幕投放序号：不能用 keyedDisplay.size 当「来了新弹幕」的判据 ——
@@ -1675,21 +1689,29 @@ private fun HubDanmakuPanel(
   // - 唯一：即便两条弹幕内容完全相同（如重复的"666"），因对象引用不同也拿到不同 key，
   //   避免 LazyLayout 因重复 key 直接崩溃（之前用 msg 本身当 key，data class 的 equals
   //   会让相同内容的弹幕撞 key，热门房几秒就触发崩溃）。
-  val keyMap = remember { mutableListOf<Pair<DanmakuMessage, Long>>() }
+  // 实现：HashMap<MsgRef, Long>，MsgRef 等价于「引用相等 + 消息自身 hashCode」——
+  // 同一对象必同桶，不同对象即便内容全同也是不同条目。旧实现每批做
+  // keyMap.firstOrNull { === } × display.none { === } 是 O(n²)（满缓冲 200×200，
+  // 热门房约 8 批/秒，全程主线程），换 HashMap 后整批 O(n)。
+  val keyMap = remember { HashMap<MsgRef, Long>() }
   val counter = remember { longArrayOf(0L) }
   val keyedDisplay = remember(display) {
-    // 仅保留仍在列表中的对象，防止 key 随消息滚动无限增长
-    keyMap.removeIf { (msg, _) -> display.none { it === msg } }
-    display.map { msg ->
-      val existing = keyMap.firstOrNull { it.first === msg }
-      val k = existing?.second ?: run {
-        val nk = counter[0]
-        counter[0] = nk + 1
-        keyMap.add(msg to nk)
+    val present = HashSet<MsgRef>(display.size * 2)
+    val out = ArrayList<Pair<Long, DanmakuMessage>>(display.size)
+    for (msg in display) {
+      val ref = MsgRef(msg)
+      present.add(ref)
+      val k = keyMap[ref] ?: run {
+        val nk = counter[0] + 1L
+        counter[0] = nk
+        keyMap[ref] = nk
         nk
       }
-      k to msg
+      out.add(k to msg)
     }
+    // 仅保留仍在列表中的对象，防止 key 随消息滚动无限增长
+    keyMap.keys.removeIf { it !in present }
+    out
   }
   LaunchedEffect(revision) {
     // 只有用户正贴着顶部（最新一条）时才自动跟到最新：
