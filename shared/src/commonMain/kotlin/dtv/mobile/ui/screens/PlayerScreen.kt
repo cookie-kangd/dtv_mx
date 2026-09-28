@@ -1696,7 +1696,7 @@ private fun HubDanmakuPanel(
   val keyMap = remember { HashMap<MsgRef, Long>() }
   val counter = remember { longArrayOf(0L) }
   val keyedDisplay = remember(display) {
-    val present = HashSet<MsgRef>(display.size * 2)
+    val present = HashSet<MsgRef>()
     val out = ArrayList<Pair<Long, DanmakuMessage>>(display.size)
     for (msg in display) {
       val ref = MsgRef(msg)
@@ -1710,7 +1710,10 @@ private fun HubDanmakuPanel(
       out.add(k to msg)
     }
     // 仅保留仍在列表中的对象，防止 key 随消息滚动无限增长
-    keyMap.keys.removeIf { it !in present }
+    val kit = keyMap.keys.iterator()
+    while (kit.hasNext()) {
+      if (kit.next() !in present) kit.remove()
+    }
     out
   }
   LaunchedEffect(revision) {

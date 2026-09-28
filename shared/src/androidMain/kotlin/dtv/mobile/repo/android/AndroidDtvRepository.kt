@@ -64,6 +64,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlin.concurrent.Volatile
 
 class AndroidDtvRepository(
   private val appContext: Context,
