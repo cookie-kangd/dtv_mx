@@ -62,9 +62,11 @@ fun HomeScreen(
   modifier: Modifier = Modifier,
 ) {
   val items = appState.followedStreamers
-  // 跟随关注列表变化记忆：原本每次重组都重跑一遍 toList + 两次 filter + 拼接，
-  // 拖动排序时每帧都在做这次 O(n) 拷贝。
-  val displayItems = remember(items) {
+  // 注意不能 remember(items)：followedStreamers 是 mutableStateListOf，
+  // 增删/更新都是原地变更、引用永不变，remember 的 key 永远相同会把
+  // 「在播优先」排序永久缓存成旧值（首页不再跟随列表变化刷新）。
+  // 这里 n 就是关注数量级（几十），每次重组重算一遍 toList+filter 开销可忽略。
+  val displayItems = run {
     val snapshot = items.toList()
     val live = snapshot.filter { it.isLive }
     val offline = snapshot.filterNot { it.isLive }
