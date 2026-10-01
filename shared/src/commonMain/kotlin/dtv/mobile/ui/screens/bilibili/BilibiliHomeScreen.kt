@@ -105,7 +105,8 @@ fun BilibiliHomeScreen(
       hasMore = incoming.size >= PAGE_SIZE && addedCount > 0
       page += 1
       if (skeletonMark != null) {
-        val remaining = 180L - skeletonMark.elapsedNow().toLong()
+        // Duration 没有无参 toLong()，必须用 inWholeMilliseconds 取整毫秒
+        val remaining = 180L - skeletonMark.elapsedNow().inWholeMilliseconds
         if (remaining > 0) delay(remaining)
       }
     } finally {
