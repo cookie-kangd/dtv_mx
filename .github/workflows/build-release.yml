@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # 应用版本号（需与 androidApp/build.gradle.kts 的 versionName 保持一致）
-      APP_VERSION: "0.2.15"
+      APP_VERSION: "0.2.16"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -63,6 +63,15 @@ jobs:
           # 校验解码产物确实是合法 keystore，避免密钥损坏导致构建出无法升级的包
           keytool -list -keystore androidApp/signing/release.keystore \
             -storepass "$SIGNING_STORE_PASSWORD" -alias "$SIGNING_KEY_ALIAS"
+
+      - name: Run unit tests (non-blocking)
+        # commonTest 里的纯函数回归测试（版本比较 / 人气格式化 / 平台映射 / URL 与 HTML 工具）。
+        # 设为非阻塞：当前覆盖率仍有限，不希望测试失败直接掐断发版；
+        # 等覆盖率补齐后去掉 continue-on-error 即可升级为卡口。
+        continue-on-error: true
+        env:
+          DTV_NO_ALIYUN_MIRROR: "true"
+        run: ./gradlew :shared:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build release APK
         # Skip the Aliyun mirror in CI (unstable / 502) and use Google/Maven Central directly.
