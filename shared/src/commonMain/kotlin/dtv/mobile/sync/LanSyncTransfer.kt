@@ -61,7 +61,8 @@ private val lanSyncJson = Json {
   isLenient = true
 }
 
-private fun platformFromDesktop(value: String): Platform? {
+// 可见性放宽到 internal 只是为了 commonTest 能覆盖这几个纯映射函数（同模块内等价）。
+internal fun platformFromDesktop(value: String): Platform? {
   return when (value.trim().uppercase()) {
     "DOUYU" -> Platform.Douyu
     "DOUYIN" -> Platform.Douyin
@@ -72,7 +73,7 @@ private fun platformFromDesktop(value: String): Platform? {
   }
 }
 
-private fun desktopPlatformFromMobile(value: Platform): String {
+internal fun desktopPlatformFromMobile(value: Platform): String {
   return when (value) {
     Platform.Douyu -> "DOUYU"
     Platform.Douyin -> "DOUYIN"
@@ -92,7 +93,7 @@ private fun <T> safeDecodeList(raw: String?, serializer: kotlinx.serialization.K
   return runCatching { lanSyncJson.decodeFromString(serializer, raw) }.getOrElse { emptyList() }
 }
 
-private fun normalizeStreamerKey(raw: String): Pair<String, String>? {
+internal fun normalizeStreamerKey(raw: String): Pair<String, String>? {
   val parts = raw.split(":")
   if (parts.size < 2) return null
   val platform = parts[0].trim().uppercase()

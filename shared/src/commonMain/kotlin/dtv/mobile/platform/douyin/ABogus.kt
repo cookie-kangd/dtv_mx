@@ -1,5 +1,6 @@
 package dtv.mobile.platform.douyin
 
+import dtv.mobile.util.currentTimeMillis
 import kotlin.math.ceil
 
 private fun rc4Encrypt(plaintext: String, key: String): String {
@@ -244,7 +245,9 @@ private fun generateRc4BbStr(
   suffix: String,
   arguments: IntArray,
 ): String {
-  val startTime = System.currentTimeMillis()
+  // 签名要把绝对时间写进 b[10]（endTime）/ b[16]（startTime），所以必须是墙上时钟，
+  // 不能用单调时钟顶替。经 expect/actual 取，避免 commonMain 直接依赖 JVM 的 System。
+  val startTime = currentTimeMillis()
   val urlList = sm3Sum(sm3Sum((urlSearchParams + suffix).encodeToByteArray()))
   val cusOnce = sm3Sum(suffix.encodeToByteArray())
   val cus = sm3Sum(cusOnce)

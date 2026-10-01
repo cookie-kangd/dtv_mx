@@ -83,6 +83,7 @@ import dtv.mobile.ui.system.PlatformBackHandler
 import dtv.mobile.update.AppUpdateInfo
 import dtv.mobile.update.UpdateState
 import dtv.mobile.update.rememberUpdateManager
+import dtv.mobile.util.formatIsoUtcToLocal
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -708,7 +709,9 @@ private fun UpdateAvailableBlock(
     }
     if (info.publishedAt.isNotBlank()) {
       Text(
-        text = info.publishedAt.replace("T", " ").removeSuffix("Z"),
+        // GitHub Release 的 published_at 是 UTC 时间，原来直接去掉 T/Z 显示，
+        // 国内用户看到的时间比实际晚 8 小时、也没有时区标注，容易误判成"版本很旧"。
+        text = formatIsoUtcToLocal(info.publishedAt),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
       )

@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -19,6 +20,7 @@ import dtv.mobile.state.CategoryMenuState
 import dtv.mobile.state.SubscribedPartition
 import dtv.mobile.ui.screens.HomePillItem
 import dtv.mobile.ui.screens.PlatformHomeContent
+import kotlin.time.TimeSource
 import kotlinx.coroutines.delay
 
 private const val PAGE_SIZE = 20
@@ -37,6 +39,9 @@ fun HuyaHomeScreen(
   var loadingMore by remember { mutableStateOf(false) }
   var hasMore by remember { mutableStateOf(true) }
   var page by remember { mutableStateOf(1) }
+  // 加载世代号：切分类 / 下拉刷新会 +1，用来丢弃「旧分区迟到的返回」。
+  // 翻页协程与切分类协程互不取消，必须靠它区分这批数据属于哪一次加载。
+  var loadGeneration by remember { mutableIntStateOf(0) }
 
   val gridState = rememberLazyGridState()
 
@@ -64,13 +69,22 @@ fun HuyaHomeScreen(
       rooms = emptyList()
       hasMore = true
       page = 1
+      loadGeneration += 1
     }
+    val generation = loadGeneration
     if (!hasMore) return
 
     if (reset) loading = true else loadingMore = true
     try {
-      val startMs = if (reset && !hadItems) System.currentTimeMillis() else 0L
+      // 骨架屏最短展示时长改用单调时钟测量：原来直接调 JVM 专属的
+      // System.currentTimeMillis()（commonMain 不该有平台依赖），而且测耗时本来
+      // 就该用单调时钟，不受系统时间跳变影响。
+      val skeletonMark = if (reset && !hadItems) TimeSource.Monotonic.markNow() else null
       val resp: PagedResult<Streamer> = appState.repo.fetchHuyaLiveList(gid = gid, page = page, limit = PAGE_SIZE)
+      // 世代校验：返回时若用户已切到别的分类，这批数据属于旧分区，必须丢弃。
+      // 翻页协程与切分类协程互不取消，否则 reset 清空的 rooms 会被旧分区的一页拼上
+      // （新分类里混进上一个分类的直播间），page 游标也跟着错位、后续分页重复漏页。
+      if (generation != loadGeneration) return
       val incoming = resp.items
       val old = rooms
       val (merged, addedCount) = if (reset) {
@@ -85,15 +99,18 @@ fun HuyaHomeScreen(
       // 不足一页（如斗鱼「语音互动-唱歌」只有 5 个房间）说明已是最后一页。
       hasMore = incoming.size >= PAGE_SIZE && addedCount > 0
       page += 1
-      if (reset && !hadItems) {
-        val elapsed = System.currentTimeMillis() - startMs
-        val remaining = 180L - elapsed
+      if (skeletonMark != null) {
+        val remaining = 180L - skeletonMark.elapsedNow().toLong()
         if (remaining > 0) delay(remaining)
       }
     } finally {
       if (reset) {
-        loading = false
-        appState.platformSwitchLoading = false
+        // 只有「当前世代」的那次 reset 才有资格清 loading：被后一次切分类抢走时不能清，
+        // 否则会把新一次加载正在显示的加载态提前抹掉。
+        if (generation == loadGeneration) {
+          loading = false
+          appState.platformSwitchLoading = false
+        }
       } else {
         loadingMore = false
       }

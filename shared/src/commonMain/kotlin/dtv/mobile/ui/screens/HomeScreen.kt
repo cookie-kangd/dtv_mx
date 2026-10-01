@@ -32,10 +32,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,7 +80,12 @@ fun HomeScreen(
 
   var draggingKey by remember { mutableStateOf<String?>(null) }
   var dragOffset by remember { mutableStateOf(Offset.Zero) }
-  var moveCount by remember { mutableIntStateOf(0) }
+  // 拖拽手势的 pointerInput key 只能认 itemKey：绝不能再把「每交换一次位置就自增的计数」
+  // 塞进 key —— key 一变手势协程就被取消重建，onDragCancel 立刻清空拖拽状态，
+  // 长按拖动只要成功交换过一次位置就会「掉手」，表现为一次长按只能挪一格。
+  // 手势闭包捕获的是创建时的列表快照，所以最新数据改用 rememberUpdatedState 读取。
+  val gridItemsRef = rememberUpdatedState(gridItems)
+  val itemsRef = rememberUpdatedState(items)
 
   if (items.isEmpty()) {
     // 空状态：图标徽章 + 主文案 + 引导副文案，对齐主流 App 的空态样式
@@ -163,7 +168,7 @@ fun HomeScreen(
                 Modifier
               },
             )
-            .pointerInput(itemKey, moveCount) {
+            .pointerInput(itemKey) {
               detectDragGesturesAfterLongPress(
                 onDragStart = {
                   draggingKey = itemKey
@@ -183,12 +188,12 @@ fun HomeScreen(
 
                   dragOffset += dragAmount
 
-                  val fromIndex = gridItems.indexOfFirst { "${it.platform}-${it.roomId}" == itemKey }
+                  val fromIndex = gridItemsRef.value.indexOfFirst { "${it.platform}-${it.roomId}" == itemKey }
                   if (fromIndex < 0) return@detectDragGesturesAfterLongPress
 
                   val draggingInfo = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == fromIndex }
                     ?: return@detectDragGesturesAfterLongPress
-                  val draggingStreamer = gridItems.getOrNull(fromIndex) ?: return@detectDragGesturesAfterLongPress
+                  val draggingStreamer = gridItemsRef.value.getOrNull(fromIndex) ?: return@detectDragGesturesAfterLongPress
                   val draggingIsLive = draggingStreamer.isLive
 
                   val draggingCenter = Offset(
@@ -198,11 +203,11 @@ fun HomeScreen(
 
                   val targetInfo = gridState.layoutInfo.visibleItemsInfo
                     .asSequence()
-                    .filter { it.index in 0..gridItems.lastIndex }
+                    .filter { it.index in 0..gridItemsRef.value.lastIndex }
                     .firstOrNull { info ->
                       if (info.index == draggingInfo.index) return@firstOrNull false
                       val idx = info.index
-                      val s = gridItems.getOrNull(idx) ?: return@firstOrNull false
+                      val s = gridItemsRef.value.getOrNull(idx) ?: return@firstOrNull false
                       if (s.isLive != draggingIsLive) return@firstOrNull false
                       val left = info.offset.x.toFloat()
                       val top = info.offset.y.toFloat()
@@ -213,19 +218,18 @@ fun HomeScreen(
 
                   val toIndex = targetInfo?.index ?: return@detectDragGesturesAfterLongPress
                   if (toIndex == fromIndex) return@detectDragGesturesAfterLongPress
-                  val targetStreamer = gridItems.getOrNull(toIndex) ?: return@detectDragGesturesAfterLongPress
+                  val targetStreamer = gridItemsRef.value.getOrNull(toIndex) ?: return@detectDragGesturesAfterLongPress
 
                   val diff = Offset(
                     x = (draggingInfo.offset.x - targetInfo.offset.x).toFloat(),
                     y = (draggingInfo.offset.y - targetInfo.offset.y).toFloat(),
                   )
 
-                  val fromBase = items.indexOfFirst { "${it.platform}-${it.roomId}" == itemKey }
-                  val toBase = items.indexOfFirst { "${it.platform}-${it.roomId}" == "${targetStreamer.platform}-${targetStreamer.roomId}" }
+                  val fromBase = itemsRef.value.indexOfFirst { "${it.platform}-${it.roomId}" == itemKey }
+                  val toBase = itemsRef.value.indexOfFirst { "${it.platform}-${it.roomId}" == "${targetStreamer.platform}-${targetStreamer.roomId}" }
                   if (fromBase < 0 || toBase < 0) return@detectDragGesturesAfterLongPress
                   appState.moveFollowedStreamer(fromIndex = fromBase, toIndex = toBase)
                   dragOffset += diff
-                  moveCount += 1
                 },
               )
             },

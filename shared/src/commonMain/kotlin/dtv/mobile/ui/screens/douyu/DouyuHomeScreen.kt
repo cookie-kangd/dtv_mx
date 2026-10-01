@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,6 +48,9 @@ fun DouyuHomeScreen(
   var loadingMore by remember { mutableStateOf(false) }
   var hasMore by remember { mutableStateOf(true) }
   var page by remember { mutableStateOf(0) } // cate2 uses offset; cate3 uses page+1
+  // 加载世代号：切分类 / 切换二级分类 / 下拉刷新会 +1，用来丢弃「旧分区迟到的返回」。
+  // 翻页协程与切分类协程互不取消，必须靠它区分这批数据属于哪一次加载。
+  var loadGeneration by remember { mutableIntStateOf(0) }
 
   val gridState = rememberLazyGridState()
 
@@ -114,7 +118,9 @@ fun DouyuHomeScreen(
       rooms = emptyList()
       hasMore = true
       page = 0
+      loadGeneration += 1
     }
+    val generation = loadGeneration
     if (!hasMore) return
 
     if (reset) loading = true else loadingMore = true
@@ -133,6 +139,10 @@ fun DouyuHomeScreen(
         )
       }
 
+      // 世代校验：返回时若用户已切到别的分类，这批数据属于旧分区，必须丢弃。
+      // 翻页协程与切分类协程互不取消，否则 reset 清空的 rooms 会被旧分区的一页拼上
+      // （新分类里混进上一个分类的直播间），page 游标也跟着错位、后续分页重复漏页。
+      if (generation != loadGeneration) return
       val incoming = result.items
       val old = rooms
       val (merged, addedCount) = if (reset) {
@@ -150,8 +160,12 @@ fun DouyuHomeScreen(
       page += 1
     } finally {
       if (reset) {
-        loading = false
-        appState.platformSwitchLoading = false
+        // 只有「当前世代」的那次 reset 才有资格清 loading：被后一次切分类抢走时不能清，
+        // 否则会把新一次加载正在显示的加载态提前抹掉。
+        if (generation == loadGeneration) {
+          loading = false
+          appState.platformSwitchLoading = false
+        }
       } else {
         loadingMore = false
       }

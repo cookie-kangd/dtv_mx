@@ -172,6 +172,10 @@ private fun QrLoginPanel(
       }
       if (r.status == BilibiliQrStatus.Expired || r.status == BilibiliQrStatus.Failed) {
         errMsg = r.message
+        // 二维码已失效/失败：必须停止轮询。否则会拿着同一个死 key 每 1.5 秒
+        // 继续打接口（界面已经显示"已失效"却还在请求），既耗电又可能触发服务端风控。
+        // 用户点「刷新二维码」会更新 qrKey，本协程随之重启并重新开始轮询。
+        break
       }
     }
   }

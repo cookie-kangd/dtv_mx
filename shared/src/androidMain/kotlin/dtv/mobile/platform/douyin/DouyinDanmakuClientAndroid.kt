@@ -66,6 +66,8 @@ class DouyinDanmakuClientAndroid(
     private const val UPDATE_VERSION_CODE = "1.3.0"
 
     private const val HEARTBEAT_MS: Long = 10_000
+    // 「最近观看房间上下文」缓存的条目上限，超出后丢弃最旧的若干条（见 prime()）。
+    private const val PRIMED_MAX_ENTRIES = 32
     private val RANDOM = SecureRandom()
 
     private fun defaultHttpClient(): OkHttpClient =
@@ -80,6 +82,12 @@ class DouyinDanmakuClientAndroid(
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
+        // ping 必须开：弹幕 WS 的 readTimeout 是 0（永不超时），一旦网络切换 / 弱网丢包
+        // 形成半开连接（对方不再回包、本端也不报错），onFailure 永远不会触发，
+        // done.await() 挂死，弹幕从此静默且永不重连（虎牙客户端有看门狗可自愈，
+        // 抖音这条路径原来没有任何兜底）。OkHttp 会周期性发 ping 帧，
+        // 对端不回 pong 时主动以 onFailure 关闭连接，把控制权交回重连循环。
+        .pingInterval(20, TimeUnit.SECONDS)
         .build()
   }
 
@@ -91,6 +99,18 @@ class DouyinDanmakuClientAndroid(
     val rId = roomId.trim()
     if (rid.isBlank() || rId.isBlank()) return
     primed[rid] = PrimedContext(roomId = rId, msToken = msToken)
+    // 这个缓存只用来记住最近观看房间的上下文，没有长期保留的必要；不设上限的话
+    // 长期浏览大量抖音直播间会单调增长（单条不大，但属无界缓存）。
+    // 超限时按迭代顺序丢弃最旧的若干条，被丢掉的房间下次进房会重新 prime。
+    if (primed.size > PRIMED_MAX_ENTRIES) {
+      val iterator = primed.keys.iterator()
+      var excess = primed.size - PRIMED_MAX_ENTRIES
+      while (excess > 0 && iterator.hasNext()) {
+        iterator.next()
+        iterator.remove()
+        excess--
+      }
+    }
     AppLog.i(TAG, "prime douyin danmaku webRid=$rid roomId=$rId msToken=${!msToken.isNullOrBlank()}")
   }
 
@@ -224,6 +244,10 @@ class DouyinDanmakuClientAndroid(
 
           if (connected) {
             connectedAny = true
+            // 连上过就复位退避：否则经历几次断线后 backoffMs 会一路翻倍并永久停在 30s
+            // （连接成功也不回落），此后哪怕网络早已恢复，每次重连都要白等半分钟，
+            // 弹幕恢复极慢。Twitch / B站 客户端都是这个做法。
+            backoffMs = 1000L
             break
           }
         }

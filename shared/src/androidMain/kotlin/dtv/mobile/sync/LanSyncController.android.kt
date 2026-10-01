@@ -6,6 +6,7 @@ import android.net.nsd.NsdServiceInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import dtv.mobile.util.AppLog
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.application.ApplicationCall
@@ -277,7 +278,14 @@ private suspend fun discoverPeersInternal(nsdManager: NsdManager, timeoutMs: Lon
     val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
     val resolveListener = object : NsdManager.ResolveListener {
-      override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
+      override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+        // mDNS 解析失败原来是彻底静默的（= Unit）：用户点「搜索设备」永远搜不到，
+        // 日志里又连一条记录都没有，线上无法区分是"发现失败"还是"解析失败"。
+        AppLog.w(
+          "DTV-LanSync",
+          "mdns resolve failed code=$errorCode name=${serviceInfo.serviceName}",
+        )
+      }
 
       override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
         val host = serviceInfo.host?.hostAddress ?: return

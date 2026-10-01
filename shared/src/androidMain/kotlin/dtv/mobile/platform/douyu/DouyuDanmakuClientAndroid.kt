@@ -64,6 +64,7 @@ class DouyuDanmakuClientAndroid(
         val done = CompletableDeferred<Unit>()
         var socket: WebSocket? = null
         var heartbeatJob: kotlinx.coroutines.Job? = null
+        var connected = false
         try {
           val req = Request.Builder()
             .url(Env1.DANMU_WS)
@@ -73,6 +74,7 @@ class DouyuDanmakuClientAndroid(
           val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
               socket = webSocket
+              connected = true
               webSocket.send(encode("type@=loginreq/roomid@=$roomId/"))
               webSocket.send(encode("type@=joingroup/rid@=$roomId/gid@=1/"))
 
@@ -125,6 +127,9 @@ class DouyuDanmakuClientAndroid(
 
           socket = okHttp.newWebSocket(req, listener)
           done.await()
+          // 连上过说明链路本身没问题，退避立刻复位；否则一次断线累积会把重连间隔
+          // 推到 30s 并永久停留（成功连接也不回落），网络恢复后还要白等半分钟。
+          if (connected) backoff = 1000L
         } catch (ce: CancellationException) {
           throw ce
         } catch (t: Throwable) {

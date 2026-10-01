@@ -46,6 +46,9 @@ fun DouyinHomeScreen(
   var hasMore by remember { mutableStateOf(true) }
   var offset by remember { mutableIntStateOf(0) }
   var msToken by remember { mutableStateOf(generateMsToken()) }
+  // 加载世代号：切分类 / 下拉刷新会 +1，用来丢弃「旧分区迟到的返回」。
+  // 翻页协程与切分类协程是两条互不取消的链，必须靠它区分数据属于哪一次加载。
+  var loadGeneration by remember { mutableIntStateOf(0) }
 
   val gridState = rememberLazyGridState()
 
@@ -73,7 +76,9 @@ fun DouyinHomeScreen(
       hasMore = true
       offset = 0
       msToken = generateMsToken()
+      loadGeneration += 1
     }
+    val generation = loadGeneration
     if (!hasMore) return
 
     if (reset) loading = true else loadingMore = true
@@ -85,6 +90,10 @@ fun DouyinHomeScreen(
         limit = PAGE_SIZE,
         msToken = msToken,
       )
+      // 世代校验：返回时若用户已切到别的分类（或又下拉刷新过一次），这批数据属于旧分区，
+      // 必须丢弃。翻页协程与切分类协程互不取消，否则 reset 清空的 rooms 会被旧分区的
+      // 一页拼上（新分类里混进上一个分类的直播间），offset 也跟着错位、后续分页重复漏页。
+      if (generation != loadGeneration) return
       val incoming = resp.items
       val old = rooms
       val (merged, addedCount) = if (reset) {
@@ -101,8 +110,12 @@ fun DouyinHomeScreen(
       offset += incoming.size
     } finally {
       if (reset) {
-        loading = false
-        appState.platformSwitchLoading = false
+        // 只有「当前世代」的那次 reset 才有资格清 loading：被后一次切分类抢走时不能清，
+        // 否则会把新一次加载正在显示的加载态提前抹掉。
+        if (generation == loadGeneration) {
+          loading = false
+          appState.platformSwitchLoading = false
+        }
       } else {
         loadingMore = false
       }

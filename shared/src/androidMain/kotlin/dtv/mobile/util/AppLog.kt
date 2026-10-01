@@ -102,7 +102,9 @@ object AppLog {
   fun flushSync() {
     if (!started) return
     val latch = CountDownLatch(1)
-    queue.offer(Flush(latch))
+    // 队列满时 offer 会返回 false 并静默丢弃这条 Flush。不检查就 await 的话，
+    // 崩溃记录会白等满 3 秒超时，而想落盘的日志依旧没落盘 —— 白赔 3 秒。
+    if (!queue.offer(Flush(latch))) return
     runCatching { latch.await(3, TimeUnit.SECONDS) }
   }
 

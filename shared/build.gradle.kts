@@ -34,6 +34,12 @@ kotlin {
       }
     }
 
+    val commonTest by getting {
+      dependencies {
+        implementation(kotlin("test"))
+      }
+    }
+
     val androidMain by getting {
       dependencies {
         val ktorVersion = "2.3.12"
