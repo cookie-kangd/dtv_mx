@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -33,7 +34,16 @@ private const val TAG = "DTV-Twitch-IRC"
 
 
 class TwitchDanmakuClientAndroid(
-  private val okHttp: OkHttpClient = OkHttpClient(),
+  // 弹幕 WS 专用客户端：readTimeout 关掉（IRC 长连接常态就是长时间没数据），并发 ping 做半开检测。
+  // 不开 ping 时，网络切换 / 弱网丢包形成的半开连接不会触发 onFailure，本端 PONG 回应也照样
+  // 发得出去，`sessionClosed` 会永久挂起 —— 弹幕从此静默且永不重连。
+  // （与抖音/虎牙客户端同款配置）
+  private val okHttp: OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(10, TimeUnit.SECONDS)
+    .readTimeout(0, TimeUnit.MILLISECONDS)
+    .writeTimeout(10, TimeUnit.SECONDS)
+    .pingInterval(20, TimeUnit.SECONDS)
+    .build(),
 ) {
   fun observe(login: String): Flow<DanmakuMessage> = callbackFlow {
     val channel = login.trim().lowercase()

@@ -45,6 +45,13 @@ import dtv.mobile.model.Streamer
 import dtv.mobile.util.formatViewerCountWanIfNeeded
 import dtv.mobile.util.normalizeHttpUrl
 
+// 封面底部压暗渐变：颜色是常量，但 Brush.verticalGradient 每次调用都会新建一个对象。
+// 卡片在列表里会被高频重组（人气文本/开播状态每秒都可能变），所以提到文件级复用同一个实例。
+// endY 用默认的 POSITIVE_INFINITY，渐变尺寸在绘制时按实际面积解析，跨不同尺寸复用是安全的。
+private val COVER_BOTTOM_SCRIM = Brush.verticalGradient(
+  colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f)),
+)
+
 @Composable
 fun HomeStreamerCard(
   streamer: Streamer,
@@ -107,11 +114,7 @@ fun HomeStreamerCard(
           Box(
             modifier = Modifier
               .matchParentSize()
-              .background(
-                Brush.verticalGradient(
-                  colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f)),
-                ),
-              ),
+              .background(COVER_BOTTOM_SCRIM),
           )
         }
       }

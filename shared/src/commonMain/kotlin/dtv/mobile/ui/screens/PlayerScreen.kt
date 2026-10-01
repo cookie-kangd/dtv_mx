@@ -89,6 +89,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import dtv.mobile.model.Platform
@@ -1683,6 +1685,12 @@ private fun HubDanmakuPanel(
   val listState = rememberLazyListState()
   val itemSpacing = if (enhancedPortrait) 8.dp else 6.dp
 
+  // 「手指是否正按在弹幕区上」：按住即暂停自动跟随。
+  // 不能只靠 listState.isScrollInProgress —— 它要滑过 touch slop 才会变成 true，
+  // 「按住不动、只想看清某一条」是不会触发的，而那恰恰是最需要暂停的情况。
+  // 用 PointerEventPass.Initial 只观察、不消费事件，因此不会抢走 LazyColumn 自己的滚动手势。
+  var pointerDown by remember { mutableStateOf(false) }
+
   val display = remember(messages) { messages.asReversed() }
   // 为每条弹幕分配「按对象身份(===)稳定且唯一」的 key：
   // - 稳定：同一条弹幕在缓冲区滚动/裁剪时引用不变，key 不变 → 不会整列重组；
@@ -1716,45 +1724,54 @@ private fun HubDanmakuPanel(
     }
     out
   }
+  // 自动跟随最新一条（reverseLayout 下最新一条在 index 0，视觉上就是最底部）。
+  //
+  // ⚠️ 这里绝对不能用 listState.firstVisibleItemIndex == 0 当「用户有没有翻走」的判据 ——
+  // v0.2.15 正是这么写的，结果把主行为整个修坏了：新弹幕是插在 index 0 的，
+  // LazyColumn 会按 key 把「原来的首项」重新定位到新下标上，于是 firstVisibleItemIndex
+  // 每来一批就从 0 变成 1、2、3……判定永远为假，**自动跟随彻底失效**，
+  // 竖屏弹幕再也不滚到最新一条。
+  // 现在只判断「用户是不是正在操作」：没在操作就无条件贴住最新一条。
   LaunchedEffect(revision) {
-    // 自动跟随最新一条，三个前提（缺一不可）：
-    // 1) 有弹幕可显示；
-    // 2) 用户当前没有在滚动 —— 手指拖拽中、以及松手之后的惯性滑动（isScrollInProgress）
-    //    都算。这条是「按不住」的关键：只判断 canScrollBackward 时，用户按住屏幕往上拖的
-    //    瞬间最新那条还在视口里（索引没变、只是偏移变了），条件照样成立，于是每来一批
-    //    新弹幕就 scrollToItem(0) 把滚动位置拽回底部 —— 手指下的内容整列跳变，历史弹幕
-    //    根本按不住、看不稳；
-    // 3) 列表仍停在最新端（reverseLayout 下最新一条是 index 0）。一旦用户翻到更早的弹幕，
-    //    就不再自动跟随，否则历史弹幕永远看不了。
-    // 松手（含惯性滑动结束）后本条自动恢复，下一次新弹幕到来即重新贴到最新一条。
-    if (keyedDisplay.isNotEmpty() &&
-      !listState.isScrollInProgress &&
-      listState.firstVisibleItemIndex == 0
-    ) {
+    if (keyedDisplay.isNotEmpty() && !pointerDown && !listState.isScrollInProgress) {
       listState.scrollToItem(index = 0)
     }
   }
 
-  // 手指松开的那一刻（含惯性滑动结束）如果人还停在最新一条附近，立刻把偏移贴正回最新 ——
-  // 不必等下一批弹幕到来（冷清房间可能几十秒没人说话，否则看上去像「松手后没恢复」）。
-  // 已经翻到更早弹幕时不动，保留用户当前阅读位置。
+  // 惯性滑动（松手后甩出去的余速）结束后立刻贴正。否则冷清房间要等下一批弹幕到来才回到最新，
+  // 看上去就像「松手后没恢复」。
   LaunchedEffect(listState) {
     snapshotFlow { listState.isScrollInProgress }
       .distinctUntilChanged()
       .collect { scrolling ->
-        if (!scrolling &&
-          listState.firstVisibleItemIndex == 0 &&
-          listState.firstVisibleItemScrollOffset != 0
-        ) {
+        if (!scrolling && !pointerDown && listState.layoutInfo.totalItemsCount > 0) {
           listState.scrollToItem(index = 0)
         }
       }
+  }
+
+  // 手指抬起的那一刻补一次贴正：按住不动期间 isScrollInProgress 恒为 false，
+  // 期间攒下的新弹幕触发不了上面两条，只能在这里把位置拉回最新。
+  LaunchedEffect(pointerDown) {
+    if (!pointerDown && listState.layoutInfo.totalItemsCount > 0) {
+      listState.scrollToItem(index = 0)
+    }
   }
 
   LazyColumn(
     modifier = modifier
       .fillMaxWidth()
       .fillMaxSize()
+      // 只观察指针按下状态，不消费事件 → 不影响 LazyColumn 自身的滑动/回弹
+      .pointerInput(Unit) {
+        awaitPointerEventScope {
+          while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val down = event.changes.any { it.pressed }
+            if (down != pointerDown) pointerDown = down
+          }
+        }
+      }
       .padding(horizontal = 10.dp, vertical = 6.dp),
     state = listState,
     reverseLayout = true,

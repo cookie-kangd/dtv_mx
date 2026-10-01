@@ -32,6 +32,13 @@ internal object HuyaDtvHerouiAlgo {
 
   private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+  // resolveAyyuid 里逐条内联的 Regex：进房/回退都会走一遍，其中两条还带 [\s\S]*? 要扫整页 HTML，
+  // 每次都重新编译纯属浪费。提到 object 里预编译（与 BilibiliLiveListApiAndroid.accessIdRegex 同款做法）。
+  private val TT_PROFILE_INFO_REGEX = Regex("""var\s+TT_PROFILE_INFO\s*=\s*(\{[\s\S]*?\});""")
+  private val LP_ESCAPED_REGEX = Regex("""\\\"lp\\\"\s*:\s*\\\"?(\d+)\\\"?""")
+  private val AYYUID_ESCAPED_REGEX = Regex("""\\\"ayyuid\\\"\s*:\s*\\\"?(\d+)\\\"?""")
+  private val YYUID_ESCAPED_REGEX = Regex("""\\\"yyuid\\\"\s*:\s*\\\"?(\d+)\\\"?""")
+
   suspend fun fetchWsInfo(client: OkHttpClient, roomIdOrUrl: String): HuyaWsInfo {
     val rid = roomIdOrUrl.toRoomId()
     val page = fetchText(
@@ -115,7 +122,7 @@ internal object HuyaDtvHerouiAlgo {
   }
 
   private suspend fun resolveAyyuid(client: OkHttpClient, rid: String, page: String): String {
-    Regex("""var\s+TT_PROFILE_INFO\s*=\s*(\{[\s\S]*?\});""")
+    TT_PROFILE_INFO_REGEX
       .find(page)
       ?.groupValues
       ?.getOrNull(1)
@@ -127,15 +134,15 @@ internal object HuyaDtvHerouiAlgo {
       }
       ?.let { return it }
 
-    Regex("""\\\"lp\\\"\s*:\s*\\\"?(\d+)\\\"?""")
+    LP_ESCAPED_REGEX
       .find(page)
       ?.groupValues
       ?.getOrNull(1)
       ?.takeIf { it.isNotBlank() }
       ?.let { return it }
 
-    Regex("""\\\"ayyuid\\\"\s*:\s*\\\"?(\d+)\\\"?""").find(page)?.groupValues?.getOrNull(1)?.let { return it }
-    Regex("""\\\"yyuid\\\"\s*:\s*\\\"?(\d+)\\\"?""").find(page)?.groupValues?.getOrNull(1)?.let { return it }
+    AYYUID_ESCAPED_REGEX.find(page)?.groupValues?.getOrNull(1)?.let { return it }
+    YYUID_ESCAPED_REGEX.find(page)?.groupValues?.getOrNull(1)?.let { return it }
 
     val api = "${Env2.PROFILE_ROOM}$rid"
     val body = fetchText(client, api, headers = mapOf("User-Agent" to genUa()))

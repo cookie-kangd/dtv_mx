@@ -408,6 +408,11 @@ class AppState(
     val wasInPlayer = currentScreen == Screen.Player
     selectedPlatform = platform
     currentPartition = null
+    // 顶栏「板块下拉菜单」必须清掉：它是由上一个平台的首页写进来的（options 是该平台的一级分区、
+    // onSelect 闭包指向那个已被销毁的组合）。不清的话切平台后会继续显示上一个平台的板块名，
+    // 点它只会写到已经废弃的 state 上——表现为「点了没反应」。
+    // 新平台的首页加载到分类后会重新写入自己的菜单。
+    categoryMenu = null
     if (wasInPlayer) {
       // 看直播时直接切平台：立即清掉播放页残留状态。
       // ExoPlayer 本体会随播放页组合销毁被 stop()/release() 释放（StreamPlayer

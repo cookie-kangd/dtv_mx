@@ -26,7 +26,13 @@ class BilibiliLiveListApiAndroid(
 ) {
   private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+  // ensureWWebid 是 suspend，可能被并发的分页请求同时调用（B站二级分区翻页）。
+  // 这两个字段跨线程读写，不加 @Volatile 时可能读到未刷新的旧值（可见性问题），
+  // 表现为偶发的 access_id 失效 / 重复抓页面。
+  @Volatile
   private var cachedWWebid: String? = null
+
+  @Volatile
   private var cachedWWebidAtMs: Long = 0L
 
   private val accessIdRegex = Regex("\"access_id\"\\s*:\\s*\"([^\"]+)\"")

@@ -33,12 +33,23 @@ import java.security.MessageDigest
 import kotlin.math.min
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.isActive
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class BilibiliDanmakuClientAndroid(
   private val httpClient: HttpClient,
   private val cookieProvider: () -> String?,
-  private val okHttp: OkHttpClient = OkHttpClient(),
+  // 弹幕 WS 专用客户端：readTimeout 关掉（长连接常态就是长时间没数据），并发 ping 做半开检测。
+  // 不开 ping 时，网络切换 / 弱网丢包形成的半开连接（对方不回包、本端也不报错）不会触发
+  // onFailure，心跳 send() 也照样返回 true，`sessionClosed` 会永久挂起 —— 弹幕从此静默
+  // 且永不重连。OkHttp 会定期发 ping 帧，对端不回 pong 就主动以 onFailure 关闭连接，
+  // 把控制权交回重连循环。（与抖音/虎牙客户端同款配置）
+  private val okHttp: OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(10, TimeUnit.SECONDS)
+    .readTimeout(0, TimeUnit.MILLISECONDS)
+    .writeTimeout(10, TimeUnit.SECONDS)
+    .pingInterval(20, TimeUnit.SECONDS)
+    .build(),
 ) {
   companion object {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -284,19 +295,27 @@ class BilibiliDanmakuClientAndroid(
     val socketRef = AtomicReference<WebSocket?>(null)
 
     val job = launch(Dispatchers.IO) {
-      val info = runCatching { fetchDanmuInfo(roomId) }
-        .onFailure { AppLog.e("DTV-Bilibili", "fetch danmu info failed roomId=$roomId", it) }
-        .getOrNull()
-        ?: return@launch
-
-      val authJson =
-        // protover=1 requests plain JSON (avoid zlib/brotli differences across regions).
-        """{"uid":${info.uid.coerceAtLeast(0L)},"roomid":${info.roomId},"protover":1,"platform":"web","type":2,"key":"${info.token}"}""".encodeToByteArray()
-      val authPacket = buildPacket(op = 7, body = authJson, ver = 1, seq = 1)
-      val heartbeatPacket = buildPacket(op = 2, body = ByteArray(0), ver = 1, seq = 1)
-
       var backoffMs = 1_200L
       while (isActive) {
+        // 取弹幕服务器参数（token + 端点列表）必须能重试，不能失败一次就结束整条 flow。
+        // 原实现是 `?: return@launch`：首次请求一旦失败（网络抖动 / 风控 / 某个区域端点异常），
+        // 这个协程直接结束，之后既不重连也不再产出任何弹幕，表现为「进房间后 B 站弹幕永久空白」，
+        // 只能退出直播间重进。抖音/斗鱼/Twitch 客户端都是在重连循环里重试的，这里补齐。
+        val info = runCatching { fetchDanmuInfo(roomId) }
+          .onFailure { AppLog.e("DTV-Bilibili", "fetch danmu info failed roomId=$roomId", it) }
+          .getOrNull()
+        if (info == null) {
+          delay(backoffMs)
+          backoffMs = (backoffMs * 2).coerceAtMost(12_000L)
+          continue
+        }
+
+        val authJson =
+          // protover=1 requests plain JSON (avoid zlib/brotli differences across regions).
+          """{"uid":${info.uid.coerceAtLeast(0L)},"roomid":${info.roomId},"protover":1,"platform":"web","type":2,"key":"${info.token}"}""".encodeToByteArray()
+        val authPacket = buildPacket(op = 7, body = authJson, ver = 1, seq = 1)
+        val heartbeatPacket = buildPacket(op = 2, body = ByteArray(0), ver = 1, seq = 1)
+
         var connectedOnce = false
         var sessionHadAuthOk = false
 

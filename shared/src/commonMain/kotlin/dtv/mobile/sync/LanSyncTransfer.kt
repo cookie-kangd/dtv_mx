@@ -20,6 +20,12 @@ private val RE_HUYA = Regex("^huya:(.+)$")
 private val RE_BILIBILI = Regex("^bilibili:(\\d+):(\\d+)$")
 private val RE_DOUYIN = Regex("^douyin:([^:]+):(.+)$")
 
+// normalizeImportTarget 判断「用户有没有显式写端口」用的两条正则：
+// scheme://host:port/... 与 scheme://[ipv6]:port/...。属于会被反复调用的输入校验路径，
+// 提到文件级预编译，避免每次导入都重新编译。
+private val RE_EXPLICIT_PORT_HOST = Regex("^\\w+://[^/:?#]+:(\\d+)(/|\\?|$)")
+private val RE_EXPLICIT_PORT_IPV6 = Regex("^\\w+://\\[[^\\]]+\\]:(\\d+)(/|\\?|$)")
+
 @Serializable
 private data class DesktopFollowedStreamer(
   val id: String,
@@ -509,8 +515,8 @@ fun normalizeImportTarget(input: String, fallbackToken: String = LAN_SYNC_DEFAUL
 
   fun hasExplicitPort(value: String): Boolean {
     // scheme://host:port/... OR scheme://[ipv6]:port/...
-    return Regex("^\\w+://\\[[^\\]]+\\]:(\\d+)(/|\\?|$)").containsMatchIn(value) ||
-      Regex("^\\w+://[^/:?#]+:(\\d+)(/|\\?|$)").containsMatchIn(value)
+    return RE_EXPLICIT_PORT_IPV6.containsMatchIn(value) ||
+      RE_EXPLICIT_PORT_HOST.containsMatchIn(value)
   }
 
   val normalizedUrlText =

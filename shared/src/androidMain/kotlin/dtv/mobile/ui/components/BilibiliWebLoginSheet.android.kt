@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -127,9 +128,18 @@ private fun QrLoginPanel(
   var qrKey by remember { mutableStateOf<String?>(null) }
   var status by remember { mutableStateOf<QrStatusUi>(QrStatusUi.Loading) }
   var errMsg by remember { mutableStateOf<String?>(null) }
+  // 重新申请二维码的触发计数：点一次「刷新二维码」自增一次，让下面的生成副作用重新跑。
+  var reloadTick by remember { mutableIntStateOf(0) }
 
-  // 首次进入面板：申请新的二维码
-  LaunchedEffect(Unit) {
+  // 首次进入面板 + 每次点「刷新二维码」：申请新的二维码。
+  // ⚠️ 这里必须挂在 reloadTick 上、不能挂在 LaunchedEffect(Unit) 上：原来的写法只在首帧跑一次，
+  // 而「刷新二维码」按钮只是把 qrKey/qrUrl 清空 —— 清空之后没有任何地方会重新生成，
+  // 于是界面永久停在「申请二维码中…」，只能关掉弹窗重开（B 站二维码约 3 分钟就过期，很容易撞上）。
+  LaunchedEffect(reloadTick) {
+    qrUrl = null
+    qrKey = null
+    status = QrStatusUi.Loading
+    errMsg = null
     runCatching { appState.repo.generateBilibiliQrCode() }
       .onSuccess { code ->
         qrUrl = code.url
@@ -174,7 +184,7 @@ private fun QrLoginPanel(
         errMsg = r.message
         // 二维码已失效/失败：必须停止轮询。否则会拿着同一个死 key 每 1.5 秒
         // 继续打接口（界面已经显示"已失效"却还在请求），既耗电又可能触发服务端风控。
-        // 用户点「刷新二维码」会更新 qrKey，本协程随之重启并重新开始轮询。
+        // 点「刷新二维码」→ reloadTick 自增 → 重新生成二维码 → qrKey 变化 → 本协程重启并继续轮询。
         break
       }
     }
@@ -230,11 +240,9 @@ private fun QrLoginPanel(
       TextButton(
         enabled = status == QrStatusUi.Expired || status == QrStatusUi.Failed,
         onClick = {
-          // 重新申请二维码
-          status = QrStatusUi.Loading
-          errMsg = null
-          qrUrl = null
-          qrKey = null
+          // 重新申请二维码：只推进计数，真正的清空 + 重新生成在 LaunchedEffect(reloadTick) 里，
+          // 保证「清空」和「重新生成」不会脱节（这正是原来卡在加载中的根因）。
+          reloadTick += 1
         },
       ) { Text("刷新二维码") }
     }
