@@ -1717,12 +1717,38 @@ private fun HubDanmakuPanel(
     out
   }
   LaunchedEffect(revision) {
-    // 只有用户正贴着顶部（最新一条）时才自动跟到最新：
-    // 之前无条件 scrollToItem(0)，用户往上翻历史弹幕会被每来一批新弹幕就拽回底部，
-    // 竖屏面板里的历史弹幕根本没法看。
-    if (keyedDisplay.isNotEmpty() && !listState.canScrollBackward) {
+    // 自动跟随最新一条，三个前提（缺一不可）：
+    // 1) 有弹幕可显示；
+    // 2) 用户当前没有在滚动 —— 手指拖拽中、以及松手之后的惯性滑动（isScrollInProgress）
+    //    都算。这条是「按不住」的关键：只判断 canScrollBackward 时，用户按住屏幕往上拖的
+    //    瞬间最新那条还在视口里（索引没变、只是偏移变了），条件照样成立，于是每来一批
+    //    新弹幕就 scrollToItem(0) 把滚动位置拽回底部 —— 手指下的内容整列跳变，历史弹幕
+    //    根本按不住、看不稳；
+    // 3) 列表仍停在最新端（reverseLayout 下最新一条是 index 0）。一旦用户翻到更早的弹幕，
+    //    就不再自动跟随，否则历史弹幕永远看不了。
+    // 松手（含惯性滑动结束）后本条自动恢复，下一次新弹幕到来即重新贴到最新一条。
+    if (keyedDisplay.isNotEmpty() &&
+      !listState.isScrollInProgress &&
+      listState.firstVisibleItemIndex == 0
+    ) {
       listState.scrollToItem(index = 0)
     }
+  }
+
+  // 手指松开的那一刻（含惯性滑动结束）如果人还停在最新一条附近，立刻把偏移贴正回最新 ——
+  // 不必等下一批弹幕到来（冷清房间可能几十秒没人说话，否则看上去像「松手后没恢复」）。
+  // 已经翻到更早弹幕时不动，保留用户当前阅读位置。
+  LaunchedEffect(listState) {
+    snapshotFlow { listState.isScrollInProgress }
+      .distinctUntilChanged()
+      .collect { scrolling ->
+        if (!scrolling &&
+          listState.firstVisibleItemIndex == 0 &&
+          listState.firstVisibleItemScrollOffset != 0
+        ) {
+          listState.scrollToItem(index = 0)
+        }
+      }
   }
 
   LazyColumn(
