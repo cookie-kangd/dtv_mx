@@ -12,7 +12,10 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.min
+import kotlinx.coroutines.Dispatchers
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -47,20 +50,25 @@ class TwitchDanmakuClientAndroid(
 ) {
   fun observe(login: String): Flow<DanmakuMessage> = callbackFlow {
     val channel = login.trim().lowercase()
-    launch {
+    // 必须显式 Dispatchers.IO：callbackFlow 的收集方在 UI 层（Main.immediate），
+    // 这个循环里有 WebSocket 收发和退避 delay，跑在主线程会卡 UI。
+    launch(Dispatchers.IO) {
       var backoff = 1000L
       while (isActive) {
         val done = CompletableDeferred<Unit>()
-        var socket: WebSocket? = null
+        // OkHttp 的回调在它自己的线程上运行，会**先于** newWebSocket() 返回写这个引用
+        // （连接一建好 onOpen 就来了）；本协程在 finally 里读它。用原子引用保证可见性，
+        // 否则可能读到 null 而漏掉 cancel，连接会留在半开状态没人回收。
+        val socket = AtomicReference<WebSocket?>(null)
         // 本次连接是否成功建立过：OkHttp 的回调在它自己的线程上跑，用原子量保证可见性。
         // 退避策略：成功连上过 → 断开后立刻用最短间隔重连（不掉线观感）；
         // 连续失败（一次都没连上）→ 指数退避，避免疯狂重试。
-        val connected = java.util.concurrent.atomic.AtomicBoolean(false)
+        val connected = AtomicBoolean(false)
         try {
           val req = Request.Builder().url(Env6.DANMU_WS).build()
           val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-              socket = webSocket
+              socket.set(webSocket)
               connected.set(true)
               webSocket.send("CAP REQ :twitch.tv/tags twitch.tv/commands")
               webSocket.send("NICK justinfan${(10_000..99_999).random()}")
@@ -114,14 +122,14 @@ class TwitchDanmakuClientAndroid(
             }
           }
 
-          socket = okHttp.newWebSocket(req, listener)
+          socket.set(okHttp.newWebSocket(req, listener))
           done.await()
         } catch (ce: CancellationException) {
           throw ce
         } catch (t: Throwable) {
           AppLog.w(TAG, "twitch irc 会话异常 channel=$channel", t)
         } finally {
-          socket?.cancel()
+          socket.get()?.cancel()
         }
         delay(backoff)
         backoff = if (connected.get()) 1_000L else min(backoff * 2, 30_000L)

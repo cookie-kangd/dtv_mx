@@ -35,6 +35,7 @@ import androidx.compose.ui.window.PopupProperties
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 下拉菜单内容的接收作用域：在 [ColumnScope] 之上增加「登记条目位置」的能力。 */
 class MenuScope internal constructor(
@@ -97,9 +98,15 @@ fun RoundedDropdownMenu(
   // 把选中项滚到视口上部留一点上下文，静默定位不做动画。
   LaunchedEffect(selectedIndex) {
     if (selectedIndex == null || selectedIndex < 0) return@LaunchedEffect
-    snapshotFlow { scrollState.maxValue > 0 && itemTops.containsKey(selectedIndex) }
-      .filter { it }
-      .first()
+    // 菜单没有限高（maxHeight == null）时根本没有滚动空间，scrollState.maxValue 恒为 0，
+    // 上面的条件永远不成立 —— 不加超时的话这个协程会一直挂到弹窗销毁才退出。
+    // 超时视为「不用滚动」，直接放弃本次定位（位置不变，不影响用户操作）。
+    val ready = withTimeoutOrNull(1_000L) {
+      snapshotFlow { scrollState.maxValue > 0 && itemTops.containsKey(selectedIndex) }
+        .filter { it }
+        .first()
+    }
+    if (ready == null) return@LaunchedEffect
     val top = itemTops[selectedIndex] ?: return@LaunchedEffect
     val target = (top - with(density) { 56.dp.toPx() }).toInt()
       .coerceIn(0, scrollState.maxValue)

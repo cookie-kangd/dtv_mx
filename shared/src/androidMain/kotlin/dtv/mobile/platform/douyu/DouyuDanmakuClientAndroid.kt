@@ -20,7 +20,11 @@ import okio.ByteString
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.min
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 
 class DouyuDanmakuClientAndroid(
   // 弹幕 WS 专用客户端：readTimeout 关掉（长连接常态就是长时间没数据），并发 ping 做半开检测。
@@ -68,13 +72,19 @@ class DouyuDanmakuClientAndroid(
     }
 
     // Reconnect loop with backoff (matches desktop behavior)
-    launch {
+    // 必须显式 Dispatchers.IO：callbackFlow 的收集方在 UI 层，默认继承的是 Main.immediate，
+    // 本循环里有 WebSocket 发送、心跳 delay 等阻塞/长驻操作，跑在主线程会卡 UI。
+    // （虎牙 / B站 / 抖音三个客户端都是这么写的）
+    launch(Dispatchers.IO) {
       var backoff = 1000L
       while (isActive) {
         val done = CompletableDeferred<Unit>()
-        var socket: WebSocket? = null
-        var heartbeatJob: kotlinx.coroutines.Job? = null
-        var connected = false
+        // 这三个量由 OkHttp 的回调线程写入、由本协程在 done.await() 之后和 finally 里读取，
+        // 必须是原子容器：普通局部变量在线程间没有可见性保证，一旦 finally 读到过期值，
+        // 心跳协程 / WebSocket 就永远不会被清理（漏掉的心跳会持续 45s 向一条已死的连接发包）。
+        val socket = AtomicReference<WebSocket?>(null)
+        val heartbeatJob = AtomicReference<Job?>(null)
+        val connected = AtomicBoolean(false)
         try {
           val req = Request.Builder()
             .url(Env1.DANMU_WS)
@@ -83,17 +93,17 @@ class DouyuDanmakuClientAndroid(
 
           val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-              socket = webSocket
-              connected = true
+              socket.set(webSocket)
+              connected.set(true)
               webSocket.send(encode("type@=loginreq/roomid@=$roomId/"))
               webSocket.send(encode("type@=joingroup/rid@=$roomId/gid@=1/"))
 
-              heartbeatJob = launch {
+              heartbeatJob.set(launch {
                 while (isActive) {
                   delay(45_000)
-                  socket?.send(encode("type@=mrkl/")) ?: break
+                  socket.get()?.send(encode("type@=mrkl/")) ?: break
                 }
-              }
+              })
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -135,19 +145,19 @@ class DouyuDanmakuClientAndroid(
             }
           }
 
-          socket = okHttp.newWebSocket(req, listener)
+          socket.set(okHttp.newWebSocket(req, listener))
           done.await()
           // 连上过说明链路本身没问题，退避立刻复位；否则一次断线累积会把重连间隔
           // 推到 30s 并永久停留（成功连接也不回落），网络恢复后还要白等半分钟。
-          if (connected) backoff = 1000L
+          if (connected.get()) backoff = 1000L
         } catch (ce: CancellationException) {
           throw ce
         } catch (t: Throwable) {
           // 不再静默吞掉：弹幕空白时至少能从日志判断是连不上、被拒还是解析失败。
           AppLog.w("DTV-Douyu-Danmaku", "douyu 弹幕会话异常 roomId=$roomId", t)
         } finally {
-          heartbeatJob?.cancel()
-          socket?.cancel()
+          heartbeatJob.get()?.cancel()
+          socket.get()?.cancel()
         }
         delay(backoff)
         backoff = min(backoff * 2, 30_000L)

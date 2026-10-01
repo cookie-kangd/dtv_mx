@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,12 +66,17 @@ fun HomeScreen(
   // 注意不能 remember(items)：followedStreamers 是 mutableStateListOf，
   // 增删/更新都是原地变更、引用永不变，remember 的 key 永远相同会把
   // 「在播优先」排序永久缓存成旧值（首页不再跟随列表变化刷新）。
-  // 这里 n 就是关注数量级（几十），每次重组重算一遍 toList+filter 开销可忽略。
-  val displayItems = run {
-    val snapshot = items.toList()
-    val live = snapshot.filter { it.isLive }
-    val offline = snapshot.filterNot { it.isLive }
-    live + offline
+  // derivedStateOf 正好补上这个缺口：它同样只在真正变化时才重算，但跟踪的是
+  // **lambda 里读到的 state**（这里的列表内容变更会通知它失效），
+  // 因此既避免了每次重组都重跑 toList+filter+concat 产生 3 个中间列表，
+  // 也不会把结果冻住；顺带让交给 LazyVerticalGrid 的那份 List 引用稳定，可跳过子项重组。
+  val displayItems by remember {
+    derivedStateOf {
+      val snapshot = items.toList()
+      val live = snapshot.filter { it.isLive }
+      val offline = snapshot.filterNot { it.isLive }
+      live + offline
+    }
   }
   val gridItems = displayItems
   var refreshing by remember { mutableStateOf(false) }

@@ -61,6 +61,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
@@ -89,8 +90,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import dtv.mobile.model.Platform
@@ -135,6 +134,7 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import kotlin.math.ceil
 
@@ -1685,11 +1685,26 @@ private fun HubDanmakuPanel(
   val listState = rememberLazyListState()
   val itemSpacing = if (enhancedPortrait) 8.dp else 6.dp
 
-  // 「手指是否正按在弹幕区上」：按住即暂停自动跟随。
-  // 不能只靠 listState.isScrollInProgress —— 它要滑过 touch slop 才会变成 true，
-  // 「按住不动、只想看清某一条」是不会触发的，而那恰恰是最需要暂停的情况。
-  // 用 PointerEventPass.Initial 只观察、不消费事件，因此不会抢走 LazyColumn 自己的滚动手势。
-  var pointerDown by remember { mutableStateOf(false) }
+  // ── 自动跟随状态机（对齐斗鱼 / 虎牙网页版的弹幕语义）──────────────────────
+  //   刚进直播间                -> autoFollow = true，面板一直贴在最新一条
+  //   手动往上翻看历史          -> 停止跟随（只看有没有真的翻走，跟手指有没有按住无关）
+  //   自己滑回视觉最底部        -> 恢复跟随
+  //
+  // ⚠️ 这里绝不能拿 listState.firstVisibleItemIndex 当判据 —— v0.2.15 就是这么写的：
+  // 新弹幕插在 index 0，LazyColumn 会按 key 把「原来的首项」重定位到新下标，
+  // 于是 index 每来一批就从 0 变成 1、2、3……「== 0」永远为假，自动跟随彻底失效。
+  // 现在一律比对「最新一条的 key 还在不在视野里」，既不依赖下标，也不依赖
+  // reverseLayout 的方向语义。
+  var autoFollow by remember { mutableStateOf(true) }
+  // 用户是否正在手势拖拽 / 惯性滑动中。拖拽期间**无论 autoFollow 是什么**都不跟随 ——
+  // 否则用户往上翻时每来一批新弹幕都会被 scrollToItem(0) 拽回底部，历史根本读不了。
+  // 这里用 interactionSource 的 DragInteraction 而不是 listState.isScrollInProgress：
+  // 后者会把程序自己的 scrollToItem 也算成「正在滚动」，容易在贴正的瞬间把自己判成
+  // 用户在操作；DragInteraction 只有在用户真的 (a) 按下并拖过 touch slop 或
+  // (b) 松手后的惯性滑动期间才存在，而且 (b) 结束后才 Stop，正好覆盖整个 user-driven 区间。
+  var userDragging by remember { mutableStateOf(false) }
+  // 上一次「确实贴住最新一条」时那条弹幕的 key。之后进来的 key 都比它大，用来算未读条数。
+  var lastSeenKey by remember { mutableStateOf(-1L) }
 
   val display = remember(messages) { messages.asReversed() }
   // 为每条弹幕分配「按对象身份(===)稳定且唯一」的 key：
@@ -1724,73 +1739,120 @@ private fun HubDanmakuPanel(
     }
     out
   }
-  // 自动跟随最新一条（reverseLayout 下最新一条在 index 0，视觉上就是最底部）。
-  //
-  // ⚠️ 这里绝对不能用 listState.firstVisibleItemIndex == 0 当「用户有没有翻走」的判据 ——
-  // v0.2.15 正是这么写的，结果把主行为整个修坏了：新弹幕是插在 index 0 的，
-  // LazyColumn 会按 key 把「原来的首项」重新定位到新下标上，于是 firstVisibleItemIndex
-  // 每来一批就从 0 变成 1、2、3……判定永远为假，**自动跟随彻底失效**，
-  // 竖屏弹幕再也不滚到最新一条。
-  // 现在只判断「用户是不是正在操作」：没在操作就无条件贴住最新一条。
-  LaunchedEffect(revision) {
-    if (keyedDisplay.isNotEmpty() && !pointerDown && !listState.isScrollInProgress) {
-      listState.scrollToItem(index = 0)
-    }
+  // 以上四个用 Ref 读取：所有长期存活的协程里一律读最新值，
+  // 既不因为闭包捕获到旧值出错，也不会因为把它们写进 LaunchedEffect 的 key 而反复重启协程。
+  val latestKeyRef = rememberUpdatedState(keyedDisplay.firstOrNull()?.first)
+  val autoFollowRef = rememberUpdatedState(autoFollow)
+  val userDraggingRef = rememberUpdatedState(userDragging)
+  val hasItemsRef = rememberUpdatedState(keyedDisplay.isNotEmpty())
+
+  // 「最新一条还在不在视野里」——全部 ethical 判据的唯一来源。
+  // 比对 key 而不是下标：同一条弹幕生命周期内 key 不变，而 index 会被 LazyLayout 的
+  // key 重定位改写（见上）。列表为空时当作「在最底部」，让首次进入也能正常贴住。
+  fun newestVisible(): Boolean {
+    val k = latestKeyRef.value ?: return true
+    val info = listState.layoutInfo
+    return info.visibleItemsInfo.isEmpty() || info.visibleItemsInfo.any { it.key == k }
   }
 
-  // 惯性滑动（松手后甩出去的余速）结束后立刻贴正。否则冷清房间要等下一批弹幕到来才回到最新，
-  // 看上去就像「松手后没恢复」。
+  suspend fun stickToNewest() {
+    if (hasItemsRef.value) listState.scrollToItem(index = 0)
+    latestKeyRef.value?.let { lastSeenKey = it }
+  }
+
+  // 用户手势生命周期：只有「用户驱动的滚动」才有资格改变跟随意图。
   LaunchedEffect(listState) {
-    snapshotFlow { listState.isScrollInProgress }
-      .distinctUntilChanged()
-      .collect { scrolling ->
-        if (!scrolling && !pointerDown && listState.layoutInfo.totalItemsCount > 0) {
-          listState.scrollToItem(index = 0)
-        }
-      }
-  }
-
-  // 手指抬起的那一刻补一次贴正：按住不动期间 isScrollInProgress 恒为 false，
-  // 期间攒下的新弹幕触发不了上面两条，只能在这里把位置拉回最新。
-  LaunchedEffect(pointerDown) {
-    if (!pointerDown && listState.layoutInfo.totalItemsCount > 0) {
-      listState.scrollToItem(index = 0)
-    }
-  }
-
-  LazyColumn(
-    modifier = modifier
-      .fillMaxWidth()
-      .fillMaxSize()
-      // 只观察指针按下状态，不消费事件 → 不影响 LazyColumn 自身的滑动/回弹
-      .pointerInput(Unit) {
-        awaitPointerEventScope {
-          while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            val down = event.changes.any { it.pressed }
-            if (down != pointerDown) pointerDown = down
+    listState.interactionSource.interactions.collect { interaction ->
+      when (interaction) {
+        is DragInteraction.Start -> userDragging = true
+        is DragInteraction.Stop, is DragInteraction.Cancel -> {
+          userDragging = false
+          // 惯性滑动完全停下后按落点决定接下来跟不跟随：
+          //   最新一条还在视野里 -> 用户已经滑回底部了，恢复跟随并立刻贴正
+          //   翻走了            -> 停下来让他安静看历史，直到他自己滑回来
+          if (newestVisible()) {
+            autoFollow = true
+            stickToNewest()
+          } else {
+            autoFollow = false
           }
         }
       }
-      .padding(horizontal = 10.dp, vertical = 6.dp),
-    state = listState,
-    reverseLayout = true,
-    contentPadding = PaddingValues(0.dp),
-    verticalArrangement = Arrangement.spacedBy(itemSpacing),
-  ) {
-    items(
-      keyedDisplay,
-      key = { it.first },
-      // 所有弹幕行同构：声明 contentType 让 LazyColumn 复用组合树/测量结果，
-      // 高频房间弹幕每秒十几条上新时的重组开销更低。
-      contentType = { "danmaku_row" },
-    ) { (_, msg) ->
-      HubDanmakuRow(
-        user = msg.user.trim().ifBlank { "匿名" },
-        content = msg.content.trim(),
-        enhancedPortrait = enhancedPortrait,
-        textScale = textScale,
-      )
+    }
+  }
+
+  // 拖拽进行中，一旦最新一条滑出视野就就地关掉跟随，不必等松手。
+  // 这里刻意只「关」不「开」：开的那一路交给上面的 Stop 分支 —— 只有「布局已稳定、
+  // 人已停手」时的落点才是可信的，否则刚夸下 touch slop 就会被判定成「已翻走」。
+  LaunchedEffect(listState) {
+    snapshotFlow { if (userDraggingRef.value) newestVisible() else true }
+      .distinctUntilChanged()
+      .collect { visible -> if (!visible) autoFollow = false }
+  }
+
+  // 自动跟随：每来一批新弹幕就贴回最新一条
+  //（reverseLayout = true 时 index 0 就是视觉最底部，也就是最新那一条）。
+  LaunchedEffect(revision) {
+    if (autoFollowRef.value && !userDraggingRef.value) stickToNewest()
+  }
+
+  // 翻历史期间攒下的新弹幕条数。key 是全局单调递增的序列号，
+  // 所以「比上次看到的 key 大」的条数就是这段时间新进来的。
+  val unseen = remember(keyedDisplay, lastSeenKey) {
+    keyedDisplay.count { it.first > lastSeenKey }
+  }
+
+  // 跟随意图由 false 翻回 true 时补一次贴正（例如点下面的「回到最新」、
+  // 或者列表在下没有 DragInteraction 的路径上恢复了跟随）。
+  LaunchedEffect(autoFollow) {
+    if (autoFollow && !userDraggingRef.value) stickToNewest()
+  }
+
+  Box(modifier = modifier.fillMaxWidth().fillMaxSize()) {
+    LazyColumn(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 10.dp, vertical = 6.dp),
+      state = listState,
+      reverseLayout = true,
+      contentPadding = PaddingValues(0.dp),
+      verticalArrangement = Arrangement.spacedBy(itemSpacing),
+    ) {
+      items(
+        keyedDisplay,
+        key = { it.first },
+        // 所有弹幕行同构：声明 contentType 让 LazyColumn 复用组合树/测量结果，
+        // 高频房间弹幕每秒十几条上新时的重组开销更低。
+        contentType = { "danmaku_row" },
+      ) { (_, msg) ->
+        HubDanmakuRow(
+          user = msg.user.trim().ifBlank { "匿名" },
+          content = msg.content.trim(),
+          enhancedPortrait = enhancedPortrait,
+          textScale = textScale,
+        )
+      }
+    }
+
+    // 翻看历史时的「回到最新」。没有这个入口的话，用户一旦滑上去就完全不知道
+    // 弹幕还在源源不断地来（面板会静止得像弹幕挂了），也找不到回来的路。
+    if (unseen > 0 && !autoFollow) {
+      Box(
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(end = 12.dp, bottom = 10.dp)
+          .clip(RoundedCornerShape(999.dp))
+          .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.92f))
+          .clickable { autoFollow = true }
+          .padding(horizontal = 12.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = "↓ $unseen 条新弹幕",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onPrimary,
+        )
+      }
     }
   }
 }

@@ -66,6 +66,13 @@ class DouyinDanmakuClientAndroid(
     private const val UPDATE_VERSION_CODE = "1.3.0"
 
     private const val HEARTBEAT_MS: Long = 10_000
+
+    // 取弹幕参数用的正则预编译：extractUserUniqueId / extractRoomId 在每次建连都要跑一遍，
+    // 现场 Regex(...) 等于每次重编译 4 个正则。（虎牙 HuyaDtvHerouiAlgo、Twitch 客户端同款做法）
+    private val RE_UNIQUE_ID_ESCAPED = Regex("""\\\"user_unique_id\\\":\\\"(\d+)\\\"""")
+    private val RE_UNIQUE_ID_PLAIN = Regex(""""user_unique_id"\s*:\s*"(\d+)"""")
+    private val RE_ROOM_ID_ESCAPED = Regex("""\\\"roomInfo\\\":\{\\\"room\\\":\{\\\"id_str\\\":\\\"(\d+)\\\"""")
+    private val RE_ROOM_ID_PLAIN = Regex(""""id_str"\s*:\s*"(\d+)"""")
     // 「最近观看房间上下文」缓存的条目上限，超出后丢弃最旧的若干条（见 prime()）。
     private const val PRIMED_MAX_ENTRIES = 32
     private val RANDOM = SecureRandom()
@@ -351,9 +358,9 @@ class DouyinDanmakuClientAndroid(
   private fun extractUserUniqueId(html: String): String {
     val patterns = listOf(
       // Matches kotlin-danmaku-android demo parsing (escaped JSON in HTML).
-      Regex("""\\\"user_unique_id\\\":\\\"(\d+)\\\""""),
+      RE_UNIQUE_ID_ESCAPED,
       // Unescaped JSON in HTML.
-      Regex(""""user_unique_id"\s*:\s*"(\d+)""""),
+      RE_UNIQUE_ID_PLAIN,
     )
     for (re in patterns) {
       val m = re.find(html) ?: continue
@@ -366,9 +373,9 @@ class DouyinDanmakuClientAndroid(
   private fun extractRoomId(html: String): String {
     val patterns = listOf(
       // Escaped JSON in HTML.
-      Regex("""\\\"roomInfo\\\":\{\\\"room\\\":\{\\\"id_str\\\":\\\"(\d+)\\\""""),
+      RE_ROOM_ID_ESCAPED,
       // Unescaped JSON in HTML.
-      Regex(""""id_str"\s*:\s*"(\d+)""""),
+      RE_ROOM_ID_PLAIN,
     )
     for (re in patterns) {
       val m = re.find(html) ?: continue

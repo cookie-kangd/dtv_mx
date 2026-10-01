@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +41,14 @@ import androidx.compose.ui.unit.sp
 import dtv.mobile.model.Streamer
 import dtv.mobile.util.formatViewerCountWanIfNeeded
 import dtv.mobile.util.normalizeHttpUrl
+
+// 封面底部压暗渐变：平台页一屏几十张卡片，滚动 / 关注态 / 人气变化时全部重组，
+// 内联构造会每次重建 Brush（内部还要 new Shader），提到文件级复用同一个实例。
+// endY 用默认的 POSITIVE_INFINITY，渐变在绘制时按实际面积解析，跨不同尺寸复用是安全的。
+// （HomeStreamerCard 同款做法，这里 alpha 略低是平台页自己的视觉口径）
+private val COVER_BOTTOM_SCRIM = Brush.verticalGradient(
+  colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.60f)),
+)
 
 /** 平台页网格直播间卡片（小卡片/大卡片模式共用一套规格，见 CardMetrics）。 */
 @Composable
@@ -107,11 +116,7 @@ fun StreamerCard(
         Box(
           modifier = Modifier
             .matchParentSize()
-            .background(
-              androidx.compose.ui.graphics.Brush.verticalGradient(
-                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.60f)),
-              ),
-            ),
+            .background(COVER_BOTTOM_SCRIM),
         )
 
         // 右上角人气徽标与左上角关注徽标：同高(24dp)、同内边距、同圆角，视觉上下对齐

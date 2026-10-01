@@ -80,8 +80,12 @@ object AppLog {
               is Flush -> pendingFlush = c.latch
             }
           }
-          if (sb.isNotEmpty()) {
-            val f = file ?: continue
+          // 这里不能写 `val f = file ?: continue`：continue 会直接跳过下面的
+          // pendingFlush?.countDown()，而 flushSync 正 await 在这个 latch 上 ——
+          // init 还没完成时（file 为 null）崩溃日志会白等到 3s 超时才放行，
+          // 最该被可靠落盘的崩溃记录反而最容易丢。
+          val f = file
+          if (f != null && sb.isNotEmpty()) {
             runCatching { FileWriter(f, true).use { it.write(sb.toString()) } }
           }
           // flush 放行必须放在写盘完成之后，保证 flushSync 返回时日志已落盘

@@ -230,7 +230,11 @@ fun PlatformInlineSearch(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-              val cover = normalizeHttpUrl(streamer.coverUrl) ?: normalizeHttpUrl(streamer.avatarUrl)
+              // normalizeHttpUrl 内部跑正则：搜索状态每变一次面板就重组一次，20 条结果 ×2 次
+              // 全在组合阶段。跟着 URL 缓存，语义不变。（HomeStreamerCard / StreamerCard 同款）
+              val cover = remember(streamer.coverUrl, streamer.avatarUrl) {
+                normalizeHttpUrl(streamer.coverUrl) ?: normalizeHttpUrl(streamer.avatarUrl)
+              }
               Box(
                 modifier = Modifier
                   .size(width = 72.dp, height = 44.dp)

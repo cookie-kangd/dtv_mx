@@ -81,6 +81,7 @@ import dtv.mobile.state.ThemeMode
 import dtv.mobile.state.VideoQuality
 import dtv.mobile.ui.system.PlatformBackHandler
 import dtv.mobile.update.AppUpdateInfo
+import dtv.mobile.update.UpdateManager
 import dtv.mobile.update.UpdateState
 import dtv.mobile.update.rememberUpdateManager
 import dtv.mobile.util.formatIsoUtcToLocal
@@ -454,8 +455,11 @@ private fun AboutSection(
       }
     }
 
-    // 检查更新（原设置根页入口移到这里）
-    UpdateCheckerCard()
+// 检查更新（原设置根页入口移到这里）
+    // updateManager 由 AboutSection 持有并传进来：两边各自 rememberUpdateManager() 会拿到
+    // 两个互不相干的实例 —— 各带一个 OkHttp client 和一份 CoroutineScope，其中一份的实例
+    // 完全闲置，state 也永远不更新；离开页面时两份都要 dispose，多一次线程池 shutdown。
+    UpdateCheckerCard(updateManager = updateManager)
 
     // 底部版本脚注
     Text(
@@ -480,8 +484,8 @@ private fun AboutSection(
 @Composable
 private fun UpdateCheckerCard(
   modifier: Modifier = Modifier,
+  updateManager: UpdateManager = rememberUpdateManager(),
 ) {
-  val updateManager = rememberUpdateManager()
   val state = updateManager.state
   var expanded by remember { mutableStateOf(false) }
   val currentVersion = updateManager.currentVersionName

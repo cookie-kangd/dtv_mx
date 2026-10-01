@@ -177,7 +177,7 @@ private object AndroidLanSyncRuntime {
     return port
   }
 
-  private fun registerMdns(nsdManager: NsdManager, port: Int, token: String): NsdManager.RegistrationListener? {
+  private suspend fun registerMdns(nsdManager: NsdManager, port: Int, token: String): NsdManager.RegistrationListener? {
     val serviceInfo = NsdServiceInfo().apply {
       serviceName = buildInstanceName(port)
       serviceType = NSD_SERVICE_TYPE
@@ -196,8 +196,12 @@ private object AndroidLanSyncRuntime {
     }
 
     runCatching {
-      // Must be on main thread.
-      android.os.Handler(android.os.Looper.getMainLooper()).post {
+      // Must be on main thread. 这里必须**同步**完成：
+      // 以前用 Handler.post 异步注册，而 stop() 里的 unregisterService 是同步执行的，
+      // 「开始共享后立刻结束共享」时 post 的任务可能还没轮到，unregister 先跑完（对一个
+      // 尚未注册的服务无效），注册随后却完成了 —— 从此再没人注销，mDNS 服务永久挂在网上，
+      // 别的设备仍能搜到本机、也能连上来。改成同步后顺序必然是 register -> unregister。
+      withContext(Dispatchers.Main.immediate) {
         runCatching { nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener) }
       }
     }
