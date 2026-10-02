@@ -70,12 +70,24 @@ class HuyaDanmakuClientAndroid(
     val resubscribeSent = AtomicBoolean(false)
     val resubscribeAtMs = AtomicLong(0)
 
+    // 见下方「缓存已拿到的 ayyuid」的说明：只在连接建立失败（包可能过期）时清空，
+    // 正常断开重连沿用缓存，避免每秒重下一次整页 HTML。
+    var cachedWsInfo: HuyaWsInfo? = null
+
     val job = launch(Dispatchers.IO) {
       var backoffMs = 1000L
       while (isActive) {
-        val wsInfo = runCatching { HuyaDtvHerouiAlgo.fetchWsInfo(http, roomId) }
+        // 本次连接是否建立过：OkHttp 的回调在它自己的线程上跑，用原子量保证可见性。
+        val connected = AtomicBoolean(false)
+
+        // 缓存已拿到的 ayyuid / 注册包：fetchWsInfo 要下载整页房间 HTML（数百 KB~1MB）
+        // 并跑 4 条正则（含 DOTALL 惰性匹配，需扫全页）。ayyuid 是浏览器长期标识，
+        // 一次会话内不会变，只有连接被服务端拒绝（包过期）时才需要重新取。
+        // 之前每轮重连都无条件重下一次 —— 退避下限 1s 时就是「每秒下载一次整页 HTML」。
+        val wsInfo = cachedWsInfo ?: runCatching { HuyaDtvHerouiAlgo.fetchWsInfo(http, roomId) }
           .onFailure { AppLog.e("DTV-Huya", "fetch huya ws info failed roomId=$roomId", it) }
           .getOrNull()
+          ?.also { cachedWsInfo = it }
 
         if (wsInfo == null) {
           delay(backoffMs)
@@ -96,6 +108,7 @@ class HuyaDanmakuClientAndroid(
             },
           ) {
             AppLog.i("DTV-Huya", "huya danmaku ws opened roomId=$roomId")
+            connected.set(true)
             val session = this
             session.send(Frame.Binary(fin = true, data = wsInfo.registerPayload))
             lastBinaryAtMs.set(System.currentTimeMillis())
@@ -233,6 +246,9 @@ class HuyaDanmakuClientAndroid(
           }
         } catch (t: Throwable) {
           AppLog.e("DTV-Huya", "huya danmaku ws connect failed roomId=$roomId", t)
+          // 没连上过就说明这份注册包/ayyuid 已被服务端拒绝（过期或失效），继续用缓存
+          // 重试没有意义，下一轮必须重新取 —— 否则会拿着废包一直连到天荒地老。
+          if (!connected.get()) cachedWsInfo = null
         }
 
         statsJobRef.getAndSet(null)?.cancel()
@@ -240,6 +256,9 @@ class HuyaDanmakuClientAndroid(
         heartbeatJobRef.getAndSet(null)?.cancel()
 
         if (!isActive) break
+        // 连上过说明链路本身没问题，退避立刻复位；否则一次断线累积会把重连间隔
+        // 推到 30s 并永久停留（成功连接也不回落），网络恢复后还要白等半分钟。
+        if (connected) backoffMs = 1000L
         AppLog.i(
           "DTV-Huya",
           "huya danmaku reconnecting roomId=$roomId backoffMs=$backoffMs recv=${recvCount.get()} decoded=${decodedCount.get()} decodeErr=${decodeErrCount.get()} dropped=${droppedCount.get()}",

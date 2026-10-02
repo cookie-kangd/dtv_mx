@@ -15,6 +15,7 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import dtv.mobile.state.SubscriptionStoreAndroid
 import dtv.mobile.util.AppCacheCleaner
+import dtv.mobile.repo.android.AndroidDtvRepository
 import dtv.mobile.util.AppLog
 import dtv.mobile.util.CrashFileLogger
 import java.util.concurrent.Executors
@@ -23,6 +24,18 @@ class DtvApplication : Application(), ImageLoaderFactory {
   private val mainHandler = Handler(Looper.getMainLooper())
   private val subscriptionStore by lazy { SubscriptionStoreAndroid(this) }
   private val cleanupExecutor by lazy { Executors.newSingleThreadExecutor() }
+
+  /**
+   * 数据仓库是**进程级单例**，由 Application 持有。
+   *
+   * 它构造时就会初始化 7 个 HTTP 客户端（Ktor + 6 个 OkHttp），每个自带
+   * Dispatcher 线程池与连接池，且全项目没有任何 close()。之前是 MainActivity 里
+   * `remember { AndroidDtvRepository(...) }` —— remember 不跨 Activity 重建，
+   * 于是旋转屏幕 / 分屏 / 主题切换 / 进出画中画每次都新建一整套，
+   * 而旧的那套线程池要等 60s 空闲才回收。连续快速操作会线性叠加，
+   * 是典型的「攒到某一次 OOM」型泄漏。
+   */
+  val repository: AndroidDtvRepository by lazy { AndroidDtvRepository(this) }
 
   /**
    * 退出清理的实际动作：先清 Coil 内存/磁盘缓存（进程内缓存，不随退出生效），

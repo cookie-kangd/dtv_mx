@@ -5,6 +5,7 @@ import android.content.Context
 import dtv.mobile.repo.DanmakuMessage
 import dtv.mobile.util.AppLog
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.net.URLEncoder
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -54,6 +55,9 @@ class DouyinDanmakuClientAndroid(
 
   companion object {
     private const val TAG = "DTV-Douyin"
+
+    /** 单条弹幕帧解压后的字节上限，超过即丢弃该帧（正常帧远小于 1MB）。 */
+    private const val GZIP_MAX_BYTES = 8 * 1024 * 1024
 
     private const val USER_AGENT = DouyinWebApiAndroid.DEFAULT_USER_AGENT
     private const val REFERER_BASE = Env3.HOST
@@ -183,33 +187,43 @@ class DouyinDanmakuClientAndroid(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-              val push = DouyinProtoLite.decodePushFrame(bytes.toByteArray()) ?: return
-              if (push.payloadType != "msg" || push.payload.isEmpty()) return
+              // 整条解码链必须包runCatching：DouyinProtoLite 的解包器对畸形帧是
+              // error() 直接抛（protobuf eof / bad len= / unsupported wire=），
+              // 而这里跑在 OkHttp 的回调线程上 —— 一抛出去没人接，
+              // done 不会被 complete、异常也不会让重连循环重来，
+              // 结果就是「连接还在、弹幕永远不再来」且没有任何日志线索。
+              // 单帧解不开就丢掉这一帧，不影响后续（弹幕流允许丢包）。
+              runCatching {
+                val push = DouyinProtoLite.decodePushFrame(bytes.toByteArray()) ?: return@runCatching
+                if (push.payloadType != "msg" || push.payload.isEmpty()) return@runCatching
 
-              val decompressed = gunzipOrNull(push.payload) ?: return
-              val resp = DouyinProtoLite.decodeResponse(decompressed) ?: return
+                val decompressed = gunzipOrNull(push.payload) ?: return@runCatching
+                val resp = DouyinProtoLite.decodeResponse(decompressed) ?: return@runCatching
 
-              if (resp.needAck) {
-                val ack = DouyinProtoLite.encodePushFrame(
-                  payloadType = "ack",
-                  logId = push.logId,
-                  payload = resp.internalExt.toByteArray(Charsets.UTF_8),
-                )
-                webSocket.send(ack.toByteString())
-              }
+                if (resp.needAck) {
+                  val ack = DouyinProtoLite.encodePushFrame(
+                    payloadType = "ack",
+                    logId = push.logId,
+                    payload = resp.internalExt.toByteArray(Charsets.UTF_8),
+                  )
+                  webSocket.send(ack.toByteString())
+                }
 
-              for (m in resp.messages) {
-                if (m.method != "WebcastChatMessage") continue
-                val chat = DouyinProtoLite.decodeChatMessage(m.payload) ?: continue
-                trySend(
-                  DanmakuMessage(
-                    roomId = rid,
-                    user = chat.nick,
-                    content = chat.content,
-                    userLevel = chat.userLevel,
-                    fansClubLevel = chat.fansClubLevel,
-                  ),
-                )
+                for (m in resp.messages) {
+                  if (m.method != "WebcastChatMessage") continue
+                  val chat = DouyinProtoLite.decodeChatMessage(m.payload) ?: continue
+                  trySend(
+                    DanmakuMessage(
+                      roomId = rid,
+                      user = chat.nick,
+                      content = chat.content,
+                      userLevel = chat.userLevel,
+                      fansClubLevel = chat.fansClubLevel,
+                    ),
+                  )
+                }
+              }.onFailure { e ->
+                AppLog.w(TAG, "douyin danmaku frame decode failed webRid=$rid bytes=${bytes.size}", e)
               }
             }
 
@@ -293,14 +307,20 @@ class DouyinDanmakuClientAndroid(
       val userUniqueId = rawUserUniqueId.ifBlank { randomDigits(12) }
 
       val roomIdFromHtml = extractRoomId(html)
-      val roomIdFromApi = runCatching { webApi.fetchRoomEnter(webRid).roomId?.trim().orEmpty() }.getOrDefault("")
-      val roomId = primedRoomId?.trim().orEmpty().ifBlank { roomIdFromHtml }.ifBlank { roomIdFromApi }
+      // 惰性求值：fetchRoomEnter 内部要算一次 ABogus 签名（5 次 SM3 + RC4）再解析整份
+      // JSON。之前是无条件调用、再用 ifBlank 兜底 —— 即使 primedRoomId 或 HTML 里
+      // 已经拿到房间号，这次带签名的请求也是白跑白算。改成按需调用。
+      val roomId = primedRoomId?.trim().orEmpty().ifBlank { roomIdFromHtml }
+        .ifBlank {
+          runCatching { webApi.fetchRoomEnter(webRid).roomId?.trim().orEmpty() }.getOrDefault("")
+        }
       if (roomId.isBlank()) error("Cannot resolve roomId for webRid=$webRid")
 
       AppLog.i(
         TAG,
         "resolveRoomInit webRid=$webRid http=${resp.code} setCookie=${resp.headers("Set-Cookie").size} " +
-          "uidFromHtml=${rawUserUniqueId.isNotBlank()} roomIdFromHtml=${roomIdFromHtml.isNotBlank()} roomIdFromApi=${roomIdFromApi.isNotBlank()}",
+          "uidFromHtml=${rawUserUniqueId.isNotBlank()} roomIdFromHtml=${roomIdFromHtml.isNotBlank()} " +
+          "roomIdFromPrimed=${primedRoomId?.isNotBlank() == true}",
       )
       return RoomInit(roomId = roomId, userUniqueId = userUniqueId, cookieHeader = cookieHeader)
     }
@@ -387,7 +407,25 @@ class DouyinDanmakuClientAndroid(
 
   private fun gunzipOrNull(data: ByteArray): ByteArray? {
     if (data.isEmpty()) return null
-    return runCatching { GZIPInputStream(ByteArrayInputStream(data)).use { it.readBytes() } }.getOrNull()
+    return runCatching {
+      // 不用 readBytes()：它对解压后长度没有任何上限，一路读到 EOF。
+      // 压缩比 10:1 意味着 1MB 的压缩帧能展开成 10MB+，异常帧理论上可到 GB 级 ——
+      // 这是全项目唯一一处无上限的内存分配，一个包就足以 OOM。
+      // 改成边解压边计数，超阈值立刻停止并按失败处理（弹幕丢一帧无感）。
+      val out = ByteArrayOutputStream(minOf(data.size * 4, GZIP_MAX_BYTES))
+      val buf = ByteArray(8 * 1024)
+      GZIPInputStream(ByteArrayInputStream(data)).use { gzip ->
+        var total = 0
+        while (true) {
+          val n = gzip.read(buf)
+          if (n < 0) break
+          total += n
+          if (total > GZIP_MAX_BYTES) return null
+          out.write(buf, 0, n)
+        }
+      }
+      out.toByteArray()
+    }.getOrNull()
   }
 
   private fun randomDigits(n: Int): String {

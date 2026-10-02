@@ -5,6 +5,21 @@ import java.nio.charset.Charset
 
 class TarsInputStream(private val data: ByteArray) {
   private var pos: Int = 0
+
+  /**
+   * 读取前统一校验剩余字节数。
+   *
+   * Tars 的字段长度全部来自网络，之前的 readString / readByteArray 直接
+   * `data.copyOfRange(pos, pos + len)`：包被截断或长度字段异常时会抛
+   * IndexOutOfBoundsException；LIST 分支的 `ByteArray(size)` 还会抛
+   * NegativeArraySizeException 或直接 OOM。统一在这里拦掉，
+   * 由上层 runCatching 兜住（与该文件既有风格一致）。
+   */
+  private fun requireRemaining(len: Int, what: String) {
+    if (len < 0 || pos + len > data.size) {
+      throw IllegalStateException("tars $what truncated: need=$len remaining=${data.size - pos}")
+    }
+  }
   private val utf8: Charset = Charsets.UTF_8
 
   private data class Head(val type: Int, val tag: Int, val headPos: Int)
@@ -157,6 +172,7 @@ class TarsInputStream(private val data: ByteArray) {
     return when (h.type) {
       TarsTypes.STRING1 -> {
         val len = readU8()
+        requireRemaining(len, "string1")
         val bytes = data.copyOfRange(pos, pos + len)
         pos += len
         bytes.toString(utf8)
@@ -164,6 +180,7 @@ class TarsInputStream(private val data: ByteArray) {
       TarsTypes.STRING4 -> {
         val len = readI32()
         if (len < 0) throw IllegalStateException("negative string length: $len")
+        requireRemaining(len, "string4")
         val bytes = data.copyOfRange(pos, pos + len)
         pos += len
         bytes.toString(utf8)
@@ -181,12 +198,17 @@ class TarsInputStream(private val data: ByteArray) {
         // dart_tars_protocol: size 使用 readInt(0, true)（带 head 的整型）
         val len = readInt(tag = 0, required = true, defaultValue = 0)
         if (len < 0) throw IllegalStateException("negative bytes length: $len")
+        requireRemaining(len, "simpleList")
         val out = data.copyOfRange(pos, pos + len)
         pos += len
         out
       }
       TarsTypes.LIST -> {
         val size = readInt(tag = 0, required = true, defaultValue = 0)
+        if (size < 0) throw IllegalStateException("negative list size: $size")
+        // size 来自网络，先确认剩余字节够不够，再分配 —— 否则一个畸形包
+        // 就能让 ByteArray(size) 抛 NegativeArraySizeException 或直接 OOM。
+        requireRemaining(size, "list")
         val out = ByteArray(size)
         for (i in 0 until size) {
           val elemHead = readHead()

@@ -86,12 +86,31 @@ fun HomeScreen(
 
   var draggingKey by remember { mutableStateOf<String?>(null) }
   var dragOffset by remember { mutableStateOf(Offset.Zero) }
+  // 本次手势是否真的挪动过位置。用于决定 onDragEnd/onDragCancel 时要不要落盘。
+  var dragReordered by remember { mutableStateOf(false) }
+  // 拖拽帧内要用「platform-roomId」反查下标。onDrag 是逐帧回调（60~120 次/秒），
+  // 现场拼字符串的话，关注 200 个主播时单个 move 事件就是 600 次字符串拼接
+  // （三处 indexOfFirst 各遍历一次），60fps 下 MB/s 级别的短命分配 —— 最容易触发 GC 抖动。
+  // 这里预先算好 key -> 下标 的映射表，帧内只做 map 查找，零字符串分配。
+  //
+  // 必须用 derivedStateOf 而不是 remember(items)：items 是 SnapshotStateList，
+  // 增删/交换都是原地变更、引用永不变，remember 的 key 永远相同会把映射表冻成旧值
+  // （拖拽中途下标全部对不上，正是之前 remember(items) 排序失效的同一个坑）。
+  val baseIndexByKey by remember {
+    derivedStateOf {
+      items.mapIndexed { index, s -> "${s.platform}-${s.roomId}" to index }.toMap()
+    }
+  }
+  val gridIndexByKey by remember {
+    derivedStateOf {
+      gridItems.mapIndexed { index, s -> "${s.platform}-${s.roomId}" to index }.toMap()
+    }
+  }
   // 拖拽手势的 pointerInput key 只能认 itemKey：绝不能再把「每交换一次位置就自增的计数」
   // 塞进 key —— key 一变手势协程就被取消重建，onDragCancel 立刻清空拖拽状态，
   // 长按拖动只要成功交换过一次位置就会「掉手」，表现为一次长按只能挪一格。
   // 手势闭包捕获的是创建时的列表快照，所以最新数据改用 rememberUpdatedState 读取。
   val gridItemsRef = rememberUpdatedState(gridItems)
-  val itemsRef = rememberUpdatedState(items)
 
   if (items.isEmpty()) {
     // 空状态：图标徽章 + 主文案 + 引导副文案，对齐主流 App 的空态样式
@@ -179,12 +198,25 @@ fun HomeScreen(
                 onDragStart = {
                   draggingKey = itemKey
                   dragOffset = Offset.Zero
+                  dragReordered = false
                 },
                 onDragCancel = {
+                  // 手势被系统打断（父容器抢走手势 / 多指）同样可能已经换过位置，
+                  // 一样要落盘，否则内存顺序与 SP 里的顺序会永久不一致。
+                  if (dragReordered) {
+                    dragReordered = false
+                    appState.persistFollowedStreamerOrder()
+                  }
                   draggingKey = null
                   dragOffset = Offset.Zero
                 },
                 onDragEnd = {
+                  // 排序只在 onDragEnd 落盘一次（onDrag 逐帧调用，不能碰 SP/JSON）。
+                  // 真的挪动过才写，否则「点一下没动」也会触发一次全量序列化。
+                  if (dragReordered) {
+                    dragReordered = false
+                    appState.persistFollowedStreamerOrder()
+                  }
                   draggingKey = null
                   dragOffset = Offset.Zero
                 },
@@ -194,9 +226,7 @@ fun HomeScreen(
 
                   dragOffset += dragAmount
 
-                  val fromIndex = gridItemsRef.value.indexOfFirst { "${it.platform}-${it.roomId}" == itemKey }
-                  if (fromIndex < 0) return@detectDragGesturesAfterLongPress
-
+                  val fromIndex = gridIndexByKey[itemKey] ?: return@detectDragGesturesAfterLongPress
                   val draggingInfo = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == fromIndex }
                     ?: return@detectDragGesturesAfterLongPress
                   val draggingStreamer = gridItemsRef.value.getOrNull(fromIndex) ?: return@detectDragGesturesAfterLongPress
@@ -208,11 +238,10 @@ fun HomeScreen(
                   )
 
                   val targetInfo = gridState.layoutInfo.visibleItemsInfo
-                    .asSequence()
-                    .filter { it.index in 0..gridItemsRef.value.lastIndex }
                     .firstOrNull { info ->
                       if (info.index == draggingInfo.index) return@firstOrNull false
                       val idx = info.index
+                      if (idx !in 0 until gridItemsRef.value.size) return@firstOrNull false
                       val s = gridItemsRef.value.getOrNull(idx) ?: return@firstOrNull false
                       if (s.isLive != draggingIsLive) return@firstOrNull false
                       val left = info.offset.x.toFloat()
@@ -231,10 +260,12 @@ fun HomeScreen(
                     y = (draggingInfo.offset.y - targetInfo.offset.y).toFloat(),
                   )
 
-                  val fromBase = itemsRef.value.indexOfFirst { "${it.platform}-${it.roomId}" == itemKey }
-                  val toBase = itemsRef.value.indexOfFirst { "${it.platform}-${it.roomId}" == "${targetStreamer.platform}-${targetStreamer.roomId}" }
-                  if (fromBase < 0 || toBase < 0) return@detectDragGesturesAfterLongPress
+                  val fromBase = baseIndexByKey[itemKey] ?: return@detectDragGesturesAfterLongPress
+                  val toBase = baseIndexByKey["${targetStreamer.platform}-${targetStreamer.roomId}"]
+                    ?: return@detectDragGesturesAfterLongPress
+                  if (fromBase == toBase) return@detectDragGesturesAfterLongPress
                   appState.moveFollowedStreamer(fromIndex = fromBase, toIndex = toBase)
+                  dragReordered = true
                   dragOffset += diff
                 },
               )

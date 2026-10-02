@@ -50,8 +50,10 @@ import dtv.mobile.state.AppState
 import dtv.mobile.ui.components.NetworkImage
 import dtv.mobile.ui.components.RoundedDropdownMenu
 import dtv.mobile.ui.system.PlatformBackHandler
+import dtv.mobile.util.AppLog
 import dtv.mobile.util.formatViewerCountWanIfNeeded
 import dtv.mobile.util.normalizeHttpUrl
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 /**
@@ -91,8 +93,19 @@ fun PlatformInlineSearch(
     val immediate = searchTick != consumedTick
     if (immediate) consumedTick = searchTick else delay(600)
     searching = true
-    results = runCatching { appState.repo.searchAnchors(platform = platform, keyword = trimmed) }
-      .getOrDefault(emptyList())
+    // 不用 runCatching：它捕获 Throwable，会把 CancellationException 也吞掉。
+    // 协程被取消（用户又改了关键字 → LaunchedEffect 重启）时，
+    // getOrDefault(emptyList()) 仍会执行，把**新一次**搜索的结果覆盖成空列表，
+    // 表现为「打完字结果又清空」。取消必须原样抛出去。
+    val found = try {
+      appState.repo.searchAnchors(platform = platform, keyword = trimmed)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      AppLog.w("DTV-Search", "search failed platform=$platform: ${e.message}")
+      emptyList()
+    }
+    results = found
     searching = false
   }
 

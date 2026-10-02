@@ -13,7 +13,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
 import androidx.core.view.WindowCompat
 import dtv.mobile.App
-import dtv.mobile.repo.android.AndroidDtvRepository
 import dtv.mobile.state.SubscriptionStoreAndroid
 import dtv.mobile.ui.player.ACTION_PIP_CLOSE
 import dtv.mobile.ui.player.PictureInPicture
@@ -58,7 +57,10 @@ class MainActivity : ComponentActivity() {
       RECEIVER_NOT_EXPORTED,
     )
     setContent {
-      val repo = remember { AndroidDtvRepository(applicationContext) }
+      // repository 由 Application 持有（进程级单例），这里只取引用不新建。
+      // 之前 remember { AndroidDtvRepository(...) } 每次 Activity 重建都会造一整套
+      // HTTP 客户端 + 线程池且从不关闭，旋转/分屏/进出画中画都在泄漏。
+      val repo = remember { (application as DtvApplication).repository }
       val store = remember { SubscriptionStoreAndroid(applicationContext) }
       App(repo = repo, subscriptionStore = store)
     }

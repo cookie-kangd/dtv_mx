@@ -79,7 +79,16 @@ fun StreamerCard(
   Surface(
     modifier = modifier
       .fillMaxWidth()
-      .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+      // graphicsLayer 只在按压期间挂载：常驻会给每个 item 挂一个独立 RenderNode，
+      // 破坏 Compose 的图层合并（一屏十几张卡 = 十几个离屏层 + 每层 save/restore）。
+      // 松手回弹动画期间也要保留，所以条件是「正在按 或 还没回到 1f」。
+      .then(
+        if (pressed || pressScale != 1f) {
+          Modifier.graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+        } else {
+          Modifier
+        },
+      )
       .clip(shape)
       .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
     shape = shape,

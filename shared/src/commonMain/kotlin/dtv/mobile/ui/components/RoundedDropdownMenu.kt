@@ -72,6 +72,17 @@ class MenuScope internal constructor(
  * 可获取焦点的 Popup 会把焦点从文本框抢走，表现为「输入第一个字符后
  * 输入法自动收起、后续字符全部丢失」。
  */
+// 玻璃高光渐变提到文件级：这个背景挂在带 verticalScroll 的 Column 上，
+// 菜单展开期间滚动每一帧都重组，内联构造 Brush 会每帧new 一个 Shader + 3 个 ColorStop。
+// endY 用默认的 POSITIVE_INFINITY，按实际面积解析，跨尺寸复用安全（与 StreamerCard 同款做法）。
+private val GLASS_HIGHLIGHT = Brush.verticalGradient(
+  colors = listOf(
+    Color.White.copy(alpha = 0.10f),
+    Color.White.copy(alpha = 0.03f),
+    Color.Transparent,
+  ),
+)
+
 @Composable
 fun RoundedDropdownMenu(
   expanded: Boolean,
@@ -137,15 +148,7 @@ fun RoundedDropdownMenu(
     ) {
       Column(
         modifier = Modifier
-          .background(
-            brush = Brush.verticalGradient(
-              colors = listOf(
-                Color.White.copy(alpha = 0.10f),
-                Color.White.copy(alpha = 0.03f),
-                Color.Transparent,
-              ),
-            ),
-          )
+          .background(brush = GLASS_HIGHLIGHT)
           .padding(vertical = 6.dp)
           .then(
             if (maxHeight != null) {

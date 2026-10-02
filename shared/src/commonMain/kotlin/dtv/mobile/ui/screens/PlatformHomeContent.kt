@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,6 +79,13 @@ fun PlatformHomeContent(
   val cardMetrics = LocalCardMetrics.current
   val scope = rememberCoroutineScope()
   var refreshing by remember { mutableStateOf(false) }
+
+  // 关注主键集合只在这里算一次（derivedStateOf：关注列表真的变了才重算）。
+  // item 里改用 `followedKeys.contains(streamerKey)` 做 O(1) 判定，
+  // 不再让每张卡片都订阅整张 followedStreamers 做 O(N) 线性扫描 + 逐项拼字符串。
+  val followedKeys by remember {
+    derivedStateOf { appState.followedKeys() }
+  }
 
   // 胶囊条滚动位置：进直播间时整页会被销毁，LazyListState 随之丢失，
   // 因此把位置按「平台」粒度存进 AppState，返回后原样还原。
@@ -178,7 +186,7 @@ fun PlatformHomeContent(
             val streamer = rooms[index]
             StreamerCard(
               streamer = streamer,
-              followed = appState.isFollowed(streamer),
+              followed = "${streamer.platform.name}:${streamer.roomId}" in followedKeys,
               onClick = { appState.openPlayer(streamer, partition = currentPartition) },
               onToggleFollow = { appState.toggleFollow(streamer) },
             )

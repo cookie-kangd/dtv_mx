@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -33,6 +34,10 @@ fun TwitchHomeScreen(
   var restored by remember { mutableStateOf(false) }
 
   var rooms: List<Streamer> by remember { mutableStateOf(emptyList()) }
+  // 请求世代：切分类时旧协程会被取消，旧协程的 finally 若无条件 loading=false，
+  // 会把新一次加载正在显示的骨架屏提前抹掉 —— 用户看到的是空白网格且不知在加载。
+  // 其余四个平台（斗鱼/虎牙/抖音/B站）都已有这个校验，这里补齐。
+  var loadGeneration by remember { mutableIntStateOf(0) }
   var loading by remember { mutableStateOf(true) }
 
   val gridState = rememberLazyGridState()
@@ -59,6 +64,8 @@ fun TwitchHomeScreen(
   }
 
   suspend fun loadPage() {
+    loadGeneration += 1
+    val generation = loadGeneration
     loading = true
     try {
       val result: TwitchPage = appState.repo.fetchTwitchLiveList(
@@ -66,10 +73,14 @@ fun TwitchHomeScreen(
         limit = PAGE_SIZE,
         chineseOnly = appState.twitchChineseOnly,
       )
+      if (generation != loadGeneration) return
       rooms = result.items
     } finally {
-      loading = false
-      appState.platformSwitchLoading = false
+      // 只有「当前世代」那次请求才有资格清 loading
+      if (generation == loadGeneration) {
+        loading = false
+        appState.platformSwitchLoading = false
+      }
     }
   }
 
@@ -113,7 +124,9 @@ fun TwitchHomeScreen(
     val partition = if (selectedSlug.isNullOrBlank()) {
       SubscribedPartition(id = "twitch:all", name = "推荐", platform = Platform.Twitch)
     } else {
-      val name = games.firstOrNull { it.id == selectedSlug }?.name ?: selectedSlug!!
+      // 不用 selectedSlug!!：onSelect 里 games.getOrNull(...) 可能拿到 null，
+      // 重组时序下这个 !! 依赖的可能是上一帧的快照。兜底成空串更安全。
+      val name = games.firstOrNull { it.id == selectedSlug }?.name ?: selectedSlug.orEmpty()
       SubscribedPartition(id = "twitch:g:$selectedSlug", name = name, platform = Platform.Twitch)
     }
     appState.currentPartition = partition

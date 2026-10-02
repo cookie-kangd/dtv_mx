@@ -83,7 +83,14 @@ fun HomeStreamerCard(
   Column(
     modifier = modifier
       .fillMaxWidth()
-      .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+      // 同StreamerCard：graphicsLayer 只在按压期间挂载，空闲时零图层。
+      .then(
+        if (pressed || pressScale != 1f) {
+          Modifier.graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+        } else {
+          Modifier
+        },
+      )
       .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
     verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp),
   ) {

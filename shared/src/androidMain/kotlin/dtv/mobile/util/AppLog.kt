@@ -142,6 +142,11 @@ object AppLog {
 
   private fun appendRaw(level: String, tag: String, message: String, t: Throwable?) {
     val f = file ?: return
+    // 队列是有界（1024）且满了直接丢弃，所以先看有没有位置，
+    // 再做「格式化时间戳 + 拼字符串 + 栈渲染」这些纯 CPU 工作。
+    // 顺序反过来时：弹幕每秒几十条 + 首页几十个请求，
+    // 队列打满后每一次调用都在白烧一次字符串拼接，然后 offer 失败被丢掉。
+    if (queue.remainingCapacity() == 0) return
     val now = DATE_FORMAT.get().format(Date())
     val line = buildString {
       append(now)

@@ -11,6 +11,9 @@ import dtv.mobile.model.Platform
 import dtv.mobile.model.Streamer
 import dtv.mobile.repo.DtvRepository
 import dtv.mobile.repo.fake.FakeDtvRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -129,6 +132,21 @@ class AppState(
 
   private fun streamerKey(streamer: Streamer): String = "${streamer.platform.name}:${streamer.roomId}"
 
+  /**
+   * 关注关系的主键集合，供列表层在组合期算一次、传布尔进item。
+   *
+   * 之前 [isFollowed] 是 `followedStreamers.any { streamerKey(it) == key }`：
+   * 一屏 25 张卡片 × 关注 50 个 = 每次重组上千次 `"${platform.name}:${roomId}"` 字符串拼接；
+   * 而它是在每个 item 里调用的，于是每个 item 都订阅了整张 followedStreamers，
+   * 任意一个主播的 isLive 翻转都会让全部可见卡片一起重组。
+   * 现在关注集合只在网格层算一次（derivedStateOf），item 只订阅自己那个布尔。
+   */
+  fun followedKeys(): Set<String> =
+    followedStreamers.mapTo(HashSet(followedStreamers.size)) { streamerKey(it) }
+
+  /** 该 key 是否在关注列表里（配合 [followedKeys] 使用，避免重复拼字符串）。 */
+  fun isFollowedKey(key: String): Boolean = followedStreamers.any { streamerKey(it) == key }
+
   fun isFollowed(streamer: Streamer): Boolean {
     val key = streamerKey(streamer)
     return followedStreamers.any { streamerKey(it) == key }
@@ -197,6 +215,10 @@ class AppState(
   fun saveRememberedCategory(platform: Platform, id: String) {
     if (!rememberCategoryEnabled) return
     if (id.isBlank()) return
+    // 值没变就直接返回：切分类时会重复调到这里，而每次都要全量映射
+    // rememberedCategoryByPlatform + JSON 编码 + SP 写，还会连带让写快照 map
+    // 的读者（顶栏 HubTopBar）失效重组。
+    if (rememberedCategoryByPlatform[platform] == id) return
     rememberedCategoryByPlatform[platform] = id
     val entries = rememberedCategoryByPlatform.entries.map { (p, pid) -> RememberedCategoryEntry(platform = p, partitionId = pid) }
     subscriptionStore.saveRememberedCategoryByPlatform(entries)
@@ -314,14 +336,39 @@ class AppState(
 
   suspend fun refreshFollowedStreamerCards() {
     val snapshot = followedStreamers.toList()
-    val updated = snapshot.map { s ->
-      repo.fetchFollowedStreamerSnapshot(s)?.let { it.copy(platform = s.platform, roomId = s.roomId) } ?: s
+    // 并发拉取：原来一个接一个 await，关注 50 个主播就是 50 次串行往返，
+    // 首页冷启动/下拉刷新的等待时间被线性放大。
+    val updated = coroutineScope {
+      snapshot.map { s ->
+        async {
+          runCatching { repo.fetchFollowedStreamerSnapshot(s) }
+            .getOrNull()
+            ?.let { it.copy(platform = s.platform, roomId = s.roomId) }
+            ?: s
+        }
+      }.awaitAll()
     }
-    followedStreamers.clear()
-    followedStreamers.addAll(updated)
+    // 原地逐项替换，而不是 clear() + addAll()。
+    // clear() 与 addAll() 是两次独立的快照失效：中间那一帧列表是空的，
+    // 首页会闪一下空白并把整屏重排两次（还把滚动位置弹回顶部）。
+    // 逐项赋值只让「值真的变了的那几项」失效。
+    for (i in updated.indices) {
+      val next = updated[i]
+      val prev = followedStreamers.getOrNull(i)
+      if (prev != next) followedStreamers[i] = next
+    }
     subscriptionStore.saveFollowedStreamers(followedStreamers.toList())
   }
 
+  /**
+   * 拖拽排序时只改内存顺序，**不落盘**。
+   *
+   * onDrag 是逐帧回调（60~120 次/秒）。之前这里每次交换都把整个关注列表
+   * JSON 序列化一遍再写 SharedPreferences，拖 3 秒就是几百次全量编码 + SP 写 ——
+   * 纯 CPU 与 IO 浪费，用户感知就是拖拽发涩。
+   * 现在改为：拖拽过程中只维护内存顺序，[persistFollowedStreamerOrder] 在
+   * onDragEnd 调一次，手势中途杀进程最多丢失这一次拖拽的排序（关注关系本身不受影响）。
+   */
   fun moveFollowedStreamer(fromIndex: Int, toIndex: Int) {
     if (fromIndex == toIndex) return
     if (fromIndex !in 0 until followedStreamers.size) return
@@ -329,6 +376,10 @@ class AppState(
 
     val item = followedStreamers.removeAt(fromIndex)
     followedStreamers.add(index = toIndex, element = item)
+  }
+
+  /** 拖拽结束后落盘一次（见 [moveFollowedStreamer] 的说明）。 */
+  fun persistFollowedStreamerOrder() {
     subscriptionStore.saveFollowedStreamers(followedStreamers.toList())
   }
 
@@ -430,6 +481,11 @@ class AppState(
     currentPartition = partition
     currentScreen = Screen.Player
     playerFullscreen = false
+    // 进播放页时平台页会被 AnimatedContent 整页销毁，但 categoryMenu 里的
+    // onSelect 是闭包，捕获了平台页的分类树与状态。AppState 是进程级长生命周期对象，
+    // 不清就会一直挂着这棵分类树（虎牙/B站各 6~7 万行 JSON 解析后的对象树，可达数百 KB）
+    // 和指向已销毁组合的闭包。selectPlatform() 已有同样处理，这里补齐。
+    categoryMenu = null
   }
 
   fun openSettings() {

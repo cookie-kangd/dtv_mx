@@ -32,6 +32,14 @@ internal class DouyinWebMsdkSignatureAndroid(
       "ac",
       "identity",
     )
+
+    /** 625KB 的 webmssdk.js 只读一次，进程内复用（见 loadJs 的说明）。 */
+    private val jsSource: String by lazy {
+      val cl = DouyinWebMsdkSignatureAndroid::class.java.classLoader
+      val stream = cl.getResourceAsStream(WEB_MSSDK_JS_RESOURCE)
+        ?: error("Missing resource $WEB_MSSDK_JS_RESOURCE")
+      stream.use { it.readBytes().toString(Charsets.UTF_8) }
+    }
   }
 
   private fun md5Hex(input: String): String {
@@ -40,10 +48,12 @@ internal class DouyinWebMsdkSignatureAndroid(
   }
 
   private fun loadJs(): String {
-    val cl = appContext.classLoader
-    val stream = cl.getResourceAsStream(WEB_MSSDK_JS_RESOURCE)
-      ?: error("Missing resource $WEB_MSSDK_JS_RESOURCE")
-    return stream.use { it.readBytes().toString(Charsets.UTF_8) }
+    // 资源是打包进 APK 的静态文件，进程内永不变。之前每次 signature() 都从
+    // classloader 重新读一遍 625KB 资源（ByteArray + UTF-16 String ≈ 1.9MB 瞬时分配），
+    // 而签名在每次建连/重连时都要算一次 —— 重连循环最长 30s 退避永不停歇，
+    // 于是这 1.9MB 在后台反复 churn。与 ExoPlayer 的解码缓冲叠加时是真实 OOM 点。
+    // 缓存字符串后每次签名只剩 QuickJS 求值本身的开销。
+    return jsSource
   }
 
   private fun msStub(roomId: String, userUniqueId: String, webcastSdkVersion: String): String {
