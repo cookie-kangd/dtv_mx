@@ -258,7 +258,7 @@ class HuyaDanmakuClientAndroid(
         if (!isActive) break
         // 连上过说明链路本身没问题，退避立刻复位；否则一次断线累积会把重连间隔
         // 推到 30s 并永久停留（成功连接也不回落），网络恢复后还要白等半分钟。
-        if (connected) backoffMs = 1000L
+        if (connected.get()) backoffMs = 1000L
         AppLog.i(
           "DTV-Huya",
           "huya danmaku reconnecting roomId=$roomId backoffMs=$backoffMs recv=${recvCount.get()} decoded=${decodedCount.get()} decodeErr=${decodeErrCount.get()} dropped=${droppedCount.get()}",
