@@ -1052,44 +1052,41 @@ fun PlayerScreen(
 
         if (!fullscreen && !verticalFullBleed && !isInPip) {
           if (canShowDanmaku && isHorizontalVideo) {
-            // 列表弹幕的高度比例：只有用户真的调过「弹幕显示区域」才按所选裁剪。
-            // v0.2.20 无条件套用了这个值，而这个开关本来的语义是「浮层弹幕飘在视频的
-            // 哪个区域」（默认 0.5 = 上半屏）；列表弹幕的区域本来就是铺满视频下方的，
-            // 于是不管有没有动过开关，升级后弹幕区一律少了一半，选「上1/4」更是直接
-            // 被底部预留吃光、一条弹幕都看不见。现在没调过就保持铺满。
-            val listAreaFraction =
-              if (appState.danmakuAreaCustomized) appState.danmakuAreaFraction else 1f
-            // 外层用 weight(1f) 占满「视频下方的全部剩余空间」，
-            // 内层面板再按上面算出的比例压缩高度并贴底对齐。
-            // 这里必须用 BoxWithConstraints 把高度算成确切的 Dp，而不是用
-            // fillMaxHeight(fraction) + heightIn(min) —— 后者会把约束的 minHeight
-            // 抬到 maxHeight 之上（小档位时必然发生），Constraints 的 min > max
-            // 是非法状态，轻则测量出怪值、重则直接抛异常。
-            BoxWithConstraints(
+            // 「弹幕显示区域」默认只服务于浮层弹幕（语义 = 飘在视频上半屏），
+            // 列表弹幕的区域本来就铺满视频下方。所以只有用户手动调过这个开关，
+            // 列表模式才按所选比例裁剪；没调过就保持铺满，与升级前完全一致。
+            // v0.2.20 无条件套用 → 弹幕区凭空少一半；v0.2.21 修的时候又把底部预留
+            // 弄丢了，面板直接贴到屏幕最底、被毛玻璃底栏整条盖住 → 一条都看不见。
+            val clipListHeight = appState.danmakuAreaCustomized
+            // 外层：占满视频下方的全部剩余空间。
+            Box(
               modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
             ) {
-              // 比例必须相对「扣掉底部预留后的真实可用高度」来算：底部要给导航条和
-              // 毛玻璃底栏留位。反过来的话比例是相对含预留的总高，小档位会被预留吃光。
-              val usableHeight = (maxHeight - danmakuBottomInset).coerceAtLeast(0.dp)
-              val panelHeight = (usableHeight * listAreaFraction)
-                // 保底：任何档位都至少留下能显示两三行弹幕的高度，不会塌成一条缝；
-                // 可用区本身不足保底值时以可用区为准，避免溢出到视频上。
-                .coerceAtLeast(minOf(DanmakuPanelMinHeight, usableHeight))
-                .coerceAtMost(usableHeight)
-              HubDanmakuPanel(
-                messages = danmakuMessages,
-                revision = danmakuRevision,
-                enhancedPortrait = isPortraitLayout,
-                textScale = appState.danmakuFontScale,
-                opacity = appState.danmakuOpacity,
+              // 内层：只负责把底部让出来。导航条 + 毛玻璃底栏浮在内容之上，
+              // 弹幕必须停在它们上沿，否则最新一条（列表贴底的那条）会被整个盖住。
+              Box(
                 modifier = Modifier
-                  .fillMaxWidth()
-                  .align(Alignment.BottomCenter)
-                  .height(panelHeight)
-                  .padding(top = 12.dp),
-              )
+                  .fillMaxSize()
+                  .padding(bottom = danmakuBottomInset),
+              ) {
+                HubDanmakuPanel(
+                  messages = danmakuMessages,
+                  revision = danmakuRevision,
+                  enhancedPortrait = isPortraitLayout,
+                  textScale = appState.danmakuFontScale,
+                  opacity = appState.danmakuOpacity,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    // 在「已让出底栏」的区域里贴底：弹幕从底栏上沿往上堆叠。
+                    .align(Alignment.BottomCenter)
+                    // 没调过开关时取 1f，铺满可用区 —— 与升级前逐像素一致。
+                    // 比例是相对「扣掉底栏预留后的可用高度」算的，不会被预留吃光。
+                    .fillMaxHeight(if (clipListHeight) appState.danmakuAreaFraction else 1f)
+                    .padding(top = 12.dp),
+                )
+              }
             }
           }
         }
@@ -2370,9 +2367,6 @@ private fun RowWrapFloatSnap(
 }
 
 /** 抖音清晰度，从低到高 */
-/** 列表弹幕面板的最小高度：保底能放下两三行，免得小档位/小屏设备下塌成一条缝。 */
-private val DanmakuPanelMinHeight = 88.dp
-
 /** 滚动弹幕最多支持的轨道数，也是占轨表的固定长度。 */
 private const val MAX_DANMAKU_TRACKS = 24
 
