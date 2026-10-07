@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -493,6 +494,9 @@ fun PlayerScreen(
       // 无论成功、失败、还是被下一个请求取消（含切房早退），loading 都必须复位。
       // 原来只在成功路径末尾写 loading = false，早退分支会漏掉 —— 万一哪条路径
       // 没能被新房间的 LaunchedEffect 兜住，用户就会看到永久转圈。
+      // 但「被后来者取代」的那个任务无权复位：同一个房间里连点切画质时，旧任务
+      // 取消得比新任务完成得早，它一复位就把新任务的转圈提前掐掉了。
+      val myJob = currentCoroutineContext()[Job]
       var result: Result<String> = Result.failure(IllegalStateException("未知平台"))
       try {
         result = when (s.platform) {
@@ -538,9 +542,9 @@ fun PlayerScreen(
           .onSuccess { url = it }
           .onFailure { error = it.message ?: "获取播放地址失败" }
       } finally {
-        // 只在结果仍然属于当前房间时才复位 loading：切房后新房间的
-        // LaunchedEffect 会自己管 loading，这里不能去覆盖它的状态。
-        if (currentRoomId.value == requestedRoomId) loading = false
+        // 只在「结果仍然属于当前房间」且「自己没被后来者取代」时才复位 loading：
+        // 切房后新房间的 LaunchedEffect 会自己管 loading，这里不能去覆盖它的状态。
+        if (myJob?.isCancelled != true && currentRoomId.value == requestedRoomId) loading = false
       }
     }
   }
@@ -1049,10 +1053,15 @@ fun PlayerScreen(
 
         if (!fullscreen && !verticalFullBleed && !isInPip) {
           if (canShowDanmaku && isHorizontalVideo) {
+            // 列表弹幕的高度比例：只有用户真的调过「弹幕显示区域」才按所选裁剪。
+            // v0.2.20 无条件套用了这个值，而这个开关本来的语义是「浮层弹幕飘在视频的
+            // 哪个区域」（默认 0.5 = 上半屏）；列表弹幕的区域本来就是铺满视频下方的，
+            // 于是不管有没有动过开关，升级后弹幕区一律少了一半，选「上1/4」更是直接
+            // 被底部预留吃光、一条弹幕都看不见。现在没调过就保持铺满。
+            val listAreaFraction =
+              if (appState.danmakuAreaCustomized) appState.danmakuAreaFraction else 1f
             // 外层 Box 用 weight(1f) 占满「视频下方的全部剩余空间」，
-            // 内层面板再按「弹幕显示区域」压缩高度并贴底对齐。
-            // 这样该开关在本模式（最常用）真正生效：上1/4 就是只留顶部 1/4 的高度给弹幕，
-            // 弹幕仍从底部往上堆叠、与底部预留（导航条 + 浮岛）严丝合缝，不会中间留空档。
+            // 内层面板再按上面算出的比例压缩高度并贴底对齐。
             Box(
               modifier = Modifier
                 .fillMaxWidth()
@@ -1067,9 +1076,14 @@ fun PlayerScreen(
                 modifier = Modifier
                   .fillMaxWidth()
                   .align(Alignment.BottomCenter)
-                  .fillMaxHeight(appState.danmakuAreaFraction)
-                  .padding(top = 12.dp)
-                  .padding(bottom = danmakuBottomInset),
+                  // 顺序要紧：先扣掉底部预留（导航条 + 浮岛），比例才是相对
+                  // 「弹幕真正能用的高度」算的。反过来的话比例是相对含预留的总高，
+                  // 小档位会被固定预留吃光。
+                  .padding(bottom = danmakuBottomInset)
+                  .fillMaxHeight(listAreaFraction)
+                  // 保底：任何档位都至少留下能显示两三行弹幕的高度，不会塌成一条缝。
+                  .heightIn(min = DanmakuPanelMinHeight)
+                  .padding(top = 12.dp),
               )
             }
           }
@@ -1957,8 +1971,14 @@ private fun HubDanmakuRow(
 ) {
   val effectiveOpacity = opacity.coerceIn(0.35f, 1.0f)
   val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-  val userChipBg = if (isDark) Color.White.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface
-  val userChipBorder = if (isDark) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f))
+  // 昵称底片也跟着变淡：DanmakuBubble（浮层/滚动弹幕）是「文字 + 底色一起淡」，
+  // 列表弹幕若只淡文字，低透明度档位下会出现「字几乎看不见、白底片还实着」的割裂感。
+  val userChipBg = if (isDark) {
+    Color.White.copy(alpha = 0.10f * effectiveOpacity)
+  } else {
+    MaterialTheme.colorScheme.surface.copy(alpha = effectiveOpacity)
+  }
+  val userChipBorder = if (isDark) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f * effectiveOpacity))
   val userFg = MaterialTheme.colorScheme.primary.copy(alpha = (if (isDark) 0.72f else 0.90f) * effectiveOpacity)
   val contentFg = if (isDark) {
     Color.White.copy(alpha = 0.84f * effectiveOpacity)
@@ -2061,15 +2081,18 @@ private fun ScrollingDanmakuOverlay(
     val minTrackHeightPx = ((lineHeightPx * textScale.coerceAtLeast(0.85f)) + vPadPx * 2f)
       .coerceAtLeast(1f)
     val trackStepPx = (minTrackHeightPx + trackGapPx).coerceAtLeast(1f)
-    val trackCount = (usableHeightPx / trackStepPx).toInt().coerceIn(1, 24)
+    val trackCount = (usableHeightPx / trackStepPx).toInt().coerceIn(1, MAX_DANMAKU_TRACKS)
     // 正在飞行的弹幕列表：只按房间切换（resetKey）重建。
     // 之前这里还带了 trackCount，于是用户调「弹幕显示区域」或「弹幕字体大小」时
     // trackCount 变化 → active 被重置成空列表 → 屏幕上正在滚的弹幕集体瞬间消失，
     // 还要等下一批新弹幕才恢复（安静房间可能好几秒）—— 表现为「一动设置弹幕就没了」。
     // 轨道数只影响「新弹幕往后排第几轨」，不影响已在飞的弹幕，故不进 key。
     val active = remember(resetKey) { mutableStateListOf<Active>() }
-    // 轨道占用表长度必须跟着 trackCount 走（索引要落在轨道数内），这个必须重建。
-    val laneAvailableAt = remember(resetKey, trackCount) { MutableList(trackCount) { 0L } }
+    // 轨道占用表：按最大轨道数一次性分配，只遍历/使用前 trackCount 个。
+    // 之前按 trackCount 重建，调「显示区域 / 字体大小」改变轨道数时整表被清零 ——
+    // 已在飞的那几十条弹幕的占轨记录全部丢失，紧跟着投放的新弹幕会被排到同一条
+    // 轨道上，出现两条弹幕叠在一起飞。固定长度后轨道数变化不会再清空占用状态。
+    val laneAvailableAt = remember(resetKey) { LongArray(MAX_DANMAKU_TRACKS) }
     // 弹幕 key 的自增序号：只随房间切换重置。
     // 绝不能跟 trackCount 一起重置 —— 那样正在飞行的弹幕 id 会与新投放的弹幕撞 key，
     // Compose 会直接抛 "Key was already used" 崩溃。
@@ -2089,7 +2112,8 @@ private fun ScrollingDanmakuOverlay(
     fun chooseTrack(now: Long): Int? {
       var bestReadyTrack = -1
       var bestReadyAt = Long.MAX_VALUE
-      laneAvailableAt.forEachIndexed { index, readyAt ->
+      for (index in 0 until trackCount) {
+        val readyAt = laneAvailableAt[index]
         if (readyAt <= now) return index
         if (readyAt < bestReadyAt) {
           bestReadyAt = readyAt
@@ -2315,7 +2339,9 @@ private fun RowWrapFloatSnap(
   selected: Float,
   onSelect: (Float) -> Unit,
 ) {
-  val nearestIndex = remember(items, selected) {
+  // items 每次重组都是新建的 List，拿它当 key 等于没缓存；档位表是固定的，
+  // 用「档位数 + 当前值」做 key 就够，避免每次重组都重算一遍最近档位。
+  val nearestIndex = remember(items.size, selected) {
     if (items.isEmpty()) {
       0
     } else {
@@ -2339,6 +2365,12 @@ private fun RowWrapFloatSnap(
 }
 
 /** 抖音清晰度，从低到高 */
+/** 列表弹幕面板的最小高度：保底能放下两三行，免得小档位/小屏设备下塌成一条缝。 */
+private val DanmakuPanelMinHeight = 88.dp
+
+/** 滚动弹幕最多支持的轨道数，也是占轨表的固定长度。 */
+private const val MAX_DANMAKU_TRACKS = 24
+
 private val DOUYIN_QUALITY_ASC = listOf("SD1", "HD1", "FULL_HD1", "ORIGIN")
 
 /** B站清晰度 qn，从低到高 */

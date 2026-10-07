@@ -71,6 +71,11 @@ class SubscriptionStoreAndroid(
     prefs.edit().putFloat("danmaku_area_fraction", value.coerceIn(0.25f, 1.0f)).apply()
   }
 
+  // 只认「用户真的点过档位」：SP 里存在这个键才说明调过。
+  // 老用户升级上来 SP 里没有该键，列表弹幕因此保持铺满，不会被默认档位砍掉一半。
+  override fun hasCustomDanmakuAreaFraction(): Boolean =
+    prefs.contains("danmaku_area_fraction")
+
   override fun loadDanmakuEnabled(): Boolean =
     prefs.getBoolean("danmaku_enabled", true)
 
