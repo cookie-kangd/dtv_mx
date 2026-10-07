@@ -442,14 +442,29 @@ fun PlayerScreen(
       val flushIntervalMs = 120L
       val pending = ArrayList<DanmakuMessage>(batchSize)
       coroutineScope {
+        // 出队前按「最新」屏蔽词再过滤一次。
+        // 入队时（collect）用的是当时的词表，用户改词后 pending 里最多还压着
+        // 24 条 / 120ms 窗口的旧结果；只靠入队过滤会让这批词漏网上屏。
+        fun flushPending() {
+          if (pending.isEmpty()) return
+          val keywords = blockKeywordsRef.value
+          if (keywords.isEmpty()) {
+            mergeDanmakuBatch(pending)
+          } else {
+            mergeDanmakuBatch(
+              pending.filterNot { m ->
+                val lower = m.content.lowercase()
+                keywords.any { lower.contains(it) }
+              },
+            )
+          }
+          pending.clear()
+        }
         // 定时排水：保证最后一批（之后没有新弹幕时）也能上屏，不会滞留缓冲区
         val drainJob = launch {
           while (isActive) {
             delay(flushIntervalMs)
-            if (pending.isNotEmpty()) {
-              mergeDanmakuBatch(pending)
-              pending.clear()
-            }
+            flushPending()
           }
         }
         try {
@@ -462,14 +477,14 @@ fun PlayerScreen(
             }
             pending.add(msg)
             // 突发弹幕攒够一批立即合并，避免缓冲区无限增长
-            if (pending.size >= batchSize) {
-              mergeDanmakuBatch(pending)
-              pending.clear()
-            }
+            if (pending.size >= batchSize) flushPending()
           }
         } finally {
           drainJob.cancel()
-          mergeDanmakuBatch(pending)
+          // 取消路径（关弹幕 / 开熄屏听播 / 切房 / 切平台）下**不能再写 UI**：
+          // 新的 effect 刚把列表清空（danmakuMessages = emptyList()），这里补一批
+          // 会让「已经关掉的弹幕」又闪回来。只有正常结束才排水。
+          if (currentCoroutineContext().isActive) flushPending()
           pending.clear()
         }
       }
@@ -722,7 +737,9 @@ fun PlayerScreen(
           onSelect = { appState.updateDanmakuOpacity(it) },
         )
 
-        Text("弹幕显示区域", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f))
+        // 作用范围写进标题：这个开关只管「画在视频画面上的弹幕」（横屏滚动弹幕 /
+        // 竖屏视频的浮层弹幕），竖屏列表弹幕的区域本来就是视频下方那块，不受它影响。
+        Text("弹幕显示区域（仅画面上的弹幕）", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f))
         RowWrapFloat(
           items = listOf(
             "上1/4" to 0.25f,
@@ -800,12 +817,22 @@ fun PlayerScreen(
       derivedStateOf { streamerFollowKey != null && appState.isFollowedKey(streamerFollowKey) }
     }
 
-    // 竖屏时毛玻璃浮岛底栏悬浮在内容之上：弹幕列表底部需要预留出
-    // 导航条 + 浮岛的高度，避免最新弹幕被底栏遮住看不清。
-    // 提到 content lambda 外面声明：弹幕面板要按「可用高度比例」裁剪顶部留白，
-    // 必须先知道底部预留量才能算准。
-    val danmakuBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() +
-      DockContentClearance
+    // 竖屏时毛玻璃浮岛底栏是 overlay（悬浮在内容之上，不像上游那样占 Scaffold 的
+    // bottomBar 槽位），所以弹幕列表必须自己给它让位 —— 而且要让「刚好那么多」。
+    //
+    // 上游（chen-zeong/dtv_mobile）的 HubDanmakuPanel 只写了 `.padding(top = 12.dp, bottom = 0.dp)`：
+    // 它的下沿正好停在底栏上沿，一个像素都不多占。我们这边原先写死
+    // `导航条 + DockContentClearance(96dp)`，而底栏后来被改紧凑过
+    // （item 最小高 54→48dp、内边距与图标间距收紧、标签字号减小），常量没跟着改，
+    // 于是多留出约 30dp 空档 —— 表现就是「弹幕明明还能往下排，却在底栏上方空着一条高度」。
+    // 改成实测高度后，弹幕下沿与底栏上沿严丝合缝。
+    val measuredDockHeight = with(LocalDensity.current) { appState.dockHeightPx.toDp() }
+    val danmakuBottomInset = if (measuredDockHeight > 0.dp) {
+      measuredDockHeight
+    } else {
+      // 首帧还没测量到底栏（或底栏此时未组合）时的兜底，与旧行为一致。
+      WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + DockContentClearance
+    }
 
     val content: @Composable () -> Unit = {
       // 横屏全屏或画中画时，视频都铺满容器并以黑色打底，保证 PiP 画面与横屏一致（不带入底部栏等杂色）。
@@ -1052,20 +1079,21 @@ fun PlayerScreen(
 
         if (!fullscreen && !verticalFullBleed && !isInPip) {
           if (canShowDanmaku && isHorizontalVideo) {
-            // 「弹幕显示区域」默认只服务于浮层弹幕（语义 = 飘在视频上半屏），
-            // 列表弹幕的区域本来就铺满视频下方。所以只有用户手动调过这个开关，
-            // 列表模式才按所选比例裁剪；没调过就保持铺满，与升级前完全一致。
-            // v0.2.20 无条件套用 → 弹幕区凭空少一半；v0.2.21 修的时候又把底部预留
-            // 弄丢了，面板直接贴到屏幕最底、被毛玻璃底栏整条盖住 → 一条都看不见。
-            val clipListHeight = appState.danmakuAreaCustomized
-            // 外层：占满视频下方的全部剩余空间。
+            // 列表模式的弹幕面板铺满「视频下沿 → 底栏上沿」的全部空间，与上游一致。
+            //
+            // 「弹幕显示区域」这个开关的语义是**浮层弹幕飘在画面的哪个区域**
+            // （DanmakuOverlay / ScrollingDanmakuOverlay 的 areaFraction：上1/4 = 只在上四分之一飞）。
+            // 列表弹幕本身就已经被限制在「视频下方那块区域」里，再拿同一个比例去裁它的高度
+            // 属于把同一件事扣两次。v0.2.20 这么改之后，只要用户点过那个开关
+            // （`prefs.contains` 判据连「点了一下已选中的默认档」都算「调过」），
+            // 竖屏列表就被永久裁掉一半甚至 3/4 —— 用户看到的正是
+            // 「弹幕区被高度遮挡、只显示了那么点」。现在一律铺满，高度只受底栏实际占用约束。
             Box(
               modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
             ) {
-              // 内层：只负责把底部让出来。导航条 + 毛玻璃底栏浮在内容之上，
-              // 弹幕必须停在它们上沿，否则最新一条（列表贴底的那条）会被整个盖住。
+              // 内层：只把底栏的实际占用高度让出来（导航条 + 毛玻璃浮岛，实测）。
               Box(
                 modifier = Modifier
                   .fillMaxSize()
@@ -1079,11 +1107,9 @@ fun PlayerScreen(
                   opacity = appState.danmakuOpacity,
                   modifier = Modifier
                     .fillMaxWidth()
-                    // 在「已让出底栏」的区域里贴底：弹幕从底栏上沿往上堆叠。
+                    // 在「已让出底栏」的区域里铺满：弹幕从底栏上沿往上堆叠。
                     .align(Alignment.BottomCenter)
-                    // 没调过开关时取 1f，铺满可用区 —— 与升级前逐像素一致。
-                    // 比例是相对「扣掉底栏预留后的可用高度」算的，不会被预留吃光。
-                    .fillMaxHeight(if (clipListHeight) appState.danmakuAreaFraction else 1f)
+                    .fillMaxHeight()
                     .padding(top = 12.dp),
                 )
               }
@@ -2099,6 +2125,21 @@ private fun ScrollingDanmakuOverlay(
     // 绝不能跟 trackCount 一起重置 —— 那样正在飞行的弹幕 id 会与新投放的弹幕撞 key，
     // Compose 会直接抛 "Key was already used" 崩溃。
     val activeIdSeq = remember(resetKey) { longArrayOf(0L) }
+
+    // trackCount 变化时（调「弹幕显示区域」或「横屏弹幕字体」）把在飞弹幕重排一次。
+    // 已飞行的弹幕持有的是旧轨道号，而 y 用的是 `item.track % trackCount`：
+    // 轨道数变小后，多条旧轨道会被折叠到同一行，屏幕上出现两条弹幕叠着飞
+    // —— 这是 v0.2.21 把 active 从 trackCount 的 key 里摘掉（修「一调设置弹幕集体消失」）
+    // 之后带出来的回归。这里只重排越界的那几条，既不重建 active（不会集体消失），
+    // 也不会重叠。
+    LaunchedEffect(trackCount) {
+      if (trackCount <= 0) return@LaunchedEffect
+      for (i in active.indices) {
+        if (active[i].track >= trackCount) {
+          active[i] = active[i].copy(track = i % trackCount)
+        }
+      }
+    }
 
     fun estimatedTextWidthPx(user: String, content: String): Float {
       val text = if (showUser) "$user  $content" else content

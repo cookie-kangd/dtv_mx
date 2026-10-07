@@ -49,11 +49,19 @@ class AppState(
   var danmakuFontScale: Float by mutableStateOf(1.0f)
   var danmakuOpacity: Float by mutableStateOf(1.0f)
   var danmakuAreaFraction: Float by mutableStateOf(0.5f)
-  /** 「弹幕显示区域」是否被用户手动调过（详见 SubscriptionStore 的注释）。 */
-  var danmakuAreaCustomized: Boolean by mutableStateOf(false)
-    private set
   /** 弹幕总开关。与字体/透明度/显示区域一样持久化，避免面板里只有它每次进房都弹回「开」。 */
   var danmakuEnabled: Boolean by mutableStateOf(true)
+
+  // 毛玻璃浮岛底栏的**实测**高度（px），由 RootScaffold 在底栏完成布局后回报。
+  // 底栏是悬浮在内容之上的 overlay，播放页的弹幕列表要按它的真实高度让位；
+  // 用写死的 DockContentClearance(96dp) 会在底栏被改紧凑后多留一条空档
+  // （详见 PlayerScreen 里 danmakuBottomInset 的注释）。
+  var dockHeightPx: Int by mutableStateOf(0)
+    private set
+
+  fun setDockHeight(px: Int) {
+    if (px > 0 && px != dockHeightPx) dockHeightPx = px
+  }
   var rememberCategoryEnabled: Boolean by mutableStateOf(true)
   var compactCardEnabled: Boolean by mutableStateOf(true)
   var videoQuality: VideoQuality by mutableStateOf(VideoQuality.Highest)
@@ -116,7 +124,6 @@ class AppState(
     danmakuFontScale = subscriptionStore.loadDanmakuFontScale()
     danmakuOpacity = subscriptionStore.loadDanmakuOpacity()
     danmakuAreaFraction = subscriptionStore.loadDanmakuAreaFraction()
-    danmakuAreaCustomized = subscriptionStore.hasCustomDanmakuAreaFraction()
     danmakuEnabled = subscriptionStore.loadDanmakuEnabled()
     rememberCategoryEnabled = subscriptionStore.loadRememberCategoryEnabled()
     compactCardEnabled = subscriptionStore.loadCompactCardEnabled()
@@ -188,8 +195,8 @@ class AppState(
   }
 
   fun updateDanmakuAreaFraction(value: Float) {
+    // 只影响浮层/滚动弹幕的飞行区域（上1/4…全屏），不再参与列表面板的高度计算。
     danmakuAreaFraction = value.coerceIn(0.25f, 1.0f)
-    danmakuAreaCustomized = true
     subscriptionStore.saveDanmakuAreaFraction(danmakuAreaFraction)
   }
 

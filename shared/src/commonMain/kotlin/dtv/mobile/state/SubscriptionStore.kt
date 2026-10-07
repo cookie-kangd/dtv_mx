@@ -29,13 +29,6 @@ interface SubscriptionStore {
   fun loadDanmakuAreaFraction(): Float
   fun saveDanmakuAreaFraction(value: Float)
 
-  // 「弹幕显示区域」是否被用户手动调过。
-  // 这个开关的原本语义是「浮层弹幕飘在视频的哪个区域」，默认 0.5（上半屏）。
-  // 竖屏列表弹幕并不是浮层，它的区域本来就是铺满视频下方的；v0.2.20 让它也读这个值，
-  // 结果所有没动过这个开关的用户升级后弹幕区凭空少了一半。
-  // 所以列表弹幕只在「用户确实调过」时才按所选比例裁剪，未调过时保持铺满。
-  fun hasCustomDanmakuAreaFraction(): Boolean
-
   // 弹幕总开关：默认开启。持久化后与字体大小/透明度/显示区域三项行为一致，
   // 避免「同一个面板里另外三项都记住了，唯独开关每次进房都自己弹回开」。
   fun loadDanmakuEnabled(): Boolean
@@ -97,7 +90,6 @@ object InMemorySubscriptionStore : SubscriptionStore {
   private var danmakuFontScale: Float = 1.0f
   private var danmakuOpacity: Float = 1.0f
   private var danmakuAreaFraction: Float = 0.5f
-  private var danmakuAreaCustomized: Boolean = false
   private var danmakuEnabled: Boolean = true
   private var partitions: List<SubscribedPartition> = emptyList()
   private var danmuBlockKeywords: List<String> = emptyList()
@@ -147,10 +139,7 @@ object InMemorySubscriptionStore : SubscriptionStore {
 
   override fun saveDanmakuAreaFraction(value: Float) {
     danmakuAreaFraction = value
-    danmakuAreaCustomized = true
   }
-
-  override fun hasCustomDanmakuAreaFraction(): Boolean = danmakuAreaCustomized
 
   override fun loadDanmakuEnabled(): Boolean = danmakuEnabled
 

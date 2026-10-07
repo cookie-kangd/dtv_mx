@@ -51,6 +51,7 @@ import dtv.mobile.ui.screens.PlatformScreen
 import dtv.mobile.ui.screens.PlayerScreen
 import dtv.mobile.ui.screens.SettingsScreen
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import dtv.mobile.ui.system.PlatformBackHandler
 import androidx.compose.animation.AnimatedContent
@@ -171,7 +172,14 @@ fun RootScaffold(appState: AppState) {
       }
 
       if (showDock) {
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+        Box(
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            // 把浮岛的真实占用高度回报给状态层：底栏已含 navigationBarsPadding，
+            // 所以这个高度就是从屏幕底边算起的实际占位。播放页的弹幕列表按它让位，
+            // 不再用写死的 DockContentClearance（详见 PlayerScreen 的 danmakuBottomInset）。
+            .onSizeChanged { appState.setDockHeight(it.height) },
+        ) {
           PlatformBottomBar(
             hazeState = hazeState,
             selectedScreen = appState.dockSelectedScreen,
