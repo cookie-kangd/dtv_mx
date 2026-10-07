@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -1060,13 +1059,25 @@ fun PlayerScreen(
             // 被底部预留吃光、一条弹幕都看不见。现在没调过就保持铺满。
             val listAreaFraction =
               if (appState.danmakuAreaCustomized) appState.danmakuAreaFraction else 1f
-            // 外层 Box 用 weight(1f) 占满「视频下方的全部剩余空间」，
+            // 外层用 weight(1f) 占满「视频下方的全部剩余空间」，
             // 内层面板再按上面算出的比例压缩高度并贴底对齐。
-            Box(
+            // 这里必须用 BoxWithConstraints 把高度算成确切的 Dp，而不是用
+            // fillMaxHeight(fraction) + heightIn(min) —— 后者会把约束的 minHeight
+            // 抬到 maxHeight 之上（小档位时必然发生），Constraints 的 min > max
+            // 是非法状态，轻则测量出怪值、重则直接抛异常。
+            BoxWithConstraints(
               modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
             ) {
+              // 比例必须相对「扣掉底部预留后的真实可用高度」来算：底部要给导航条和
+              // 毛玻璃底栏留位。反过来的话比例是相对含预留的总高，小档位会被预留吃光。
+              val usableHeight = (maxHeight - danmakuBottomInset).coerceAtLeast(0.dp)
+              val panelHeight = (usableHeight * listAreaFraction)
+                // 保底：任何档位都至少留下能显示两三行弹幕的高度，不会塌成一条缝；
+                // 可用区本身不足保底值时以可用区为准，避免溢出到视频上。
+                .coerceAtLeast(minOf(DanmakuPanelMinHeight, usableHeight))
+                .coerceAtMost(usableHeight)
               HubDanmakuPanel(
                 messages = danmakuMessages,
                 revision = danmakuRevision,
@@ -1076,13 +1087,7 @@ fun PlayerScreen(
                 modifier = Modifier
                   .fillMaxWidth()
                   .align(Alignment.BottomCenter)
-                  // 顺序要紧：先扣掉底部预留（导航条 + 浮岛），比例才是相对
-                  // 「弹幕真正能用的高度」算的。反过来的话比例是相对含预留的总高，
-                  // 小档位会被固定预留吃光。
-                  .padding(bottom = danmakuBottomInset)
-                  .fillMaxHeight(listAreaFraction)
-                  // 保底：任何档位都至少留下能显示两三行弹幕的高度，不会塌成一条缝。
-                  .heightIn(min = DanmakuPanelMinHeight)
+                  .height(panelHeight)
                   .padding(top = 12.dp),
               )
             }
