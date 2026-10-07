@@ -29,6 +29,11 @@ interface SubscriptionStore {
   fun loadDanmakuAreaFraction(): Float
   fun saveDanmakuAreaFraction(value: Float)
 
+  // 弹幕总开关：默认开启。持久化后与字体大小/透明度/显示区域三项行为一致，
+  // 避免「同一个面板里另外三项都记住了，唯独开关每次进房都自己弹回开」。
+  fun loadDanmakuEnabled(): Boolean
+  fun saveDanmakuEnabled(value: Boolean)
+
   fun loadSubscribedPartitions(): List<SubscribedPartition>
   fun saveSubscribedPartitions(items: List<SubscribedPartition>)
 
@@ -81,10 +86,11 @@ interface SubscriptionStore {
 object InMemorySubscriptionStore : SubscriptionStore {
   private var themeMode: ThemeMode = ThemeMode.System
   private var followed: List<Streamer> = emptyList()
-  private var landscapeDanmakuFontScale: Float = 1.2f
+  private var landscapeDanmakuFontScale: Float = 1.15f
   private var danmakuFontScale: Float = 1.0f
   private var danmakuOpacity: Float = 1.0f
   private var danmakuAreaFraction: Float = 0.5f
+  private var danmakuEnabled: Boolean = true
   private var partitions: List<SubscribedPartition> = emptyList()
   private var danmuBlockKeywords: List<String> = emptyList()
   private var rememberCategoryEnabled: Boolean = true
@@ -133,6 +139,12 @@ object InMemorySubscriptionStore : SubscriptionStore {
 
   override fun saveDanmakuAreaFraction(value: Float) {
     danmakuAreaFraction = value
+  }
+
+  override fun loadDanmakuEnabled(): Boolean = danmakuEnabled
+
+  override fun saveDanmakuEnabled(value: Boolean) {
+    danmakuEnabled = value
   }
 
   override fun loadSubscribedPartitions(): List<SubscribedPartition> = partitions

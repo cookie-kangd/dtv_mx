@@ -22,7 +22,7 @@ kotlin {
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
         implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
-        val ktorVersion = "2.3.12"
+        val ktorVersion = "2.3.13"
         implementation("io.ktor:ktor-client-core:$ktorVersion")
         implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
         implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
@@ -42,7 +42,7 @@ kotlin {
 
     val androidMain by getting {
       dependencies {
-        val ktorVersion = "2.3.12"
+        val ktorVersion = "2.3.13"
         implementation("io.ktor:ktor-client-cio:$ktorVersion")
         implementation("io.ktor:ktor-client-okhttp:$ktorVersion")
         implementation("io.ktor:ktor-client-logging:$ktorVersion")

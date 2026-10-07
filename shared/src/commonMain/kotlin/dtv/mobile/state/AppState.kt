@@ -43,10 +43,14 @@ class AppState(
   private val subscriptionStore: SubscriptionStore,
 ) {
   var themeMode: ThemeMode by mutableStateOf(ThemeMode.System)
-  var landscapeDanmakuFontScale: Float by mutableStateOf(1.2f)
+  // 默认 1.15f：必须与播放设置「横屏弹幕字体」的档位（1.0/1.15/1.30/1.45）对齐，
+  // 否则默认值不命中任何档位，四个 chip 全不高亮（详见 SubscriptionStoreAndroid 注释）。
+  var landscapeDanmakuFontScale: Float by mutableStateOf(1.15f)
   var danmakuFontScale: Float by mutableStateOf(1.0f)
   var danmakuOpacity: Float by mutableStateOf(1.0f)
   var danmakuAreaFraction: Float by mutableStateOf(0.5f)
+  /** 弹幕总开关。与字体/透明度/显示区域一样持久化，避免面板里只有它每次进房都弹回「开」。 */
+  var danmakuEnabled: Boolean by mutableStateOf(true)
   var rememberCategoryEnabled: Boolean by mutableStateOf(true)
   var compactCardEnabled: Boolean by mutableStateOf(true)
   var videoQuality: VideoQuality by mutableStateOf(VideoQuality.Highest)
@@ -109,6 +113,7 @@ class AppState(
     danmakuFontScale = subscriptionStore.loadDanmakuFontScale()
     danmakuOpacity = subscriptionStore.loadDanmakuOpacity()
     danmakuAreaFraction = subscriptionStore.loadDanmakuAreaFraction()
+    danmakuEnabled = subscriptionStore.loadDanmakuEnabled()
     rememberCategoryEnabled = subscriptionStore.loadRememberCategoryEnabled()
     compactCardEnabled = subscriptionStore.loadCompactCardEnabled()
     videoQuality = VideoQuality.fromNameOrHighest(subscriptionStore.loadVideoQuality())
@@ -181,6 +186,11 @@ class AppState(
   fun updateDanmakuAreaFraction(value: Float) {
     danmakuAreaFraction = value.coerceIn(0.25f, 1.0f)
     subscriptionStore.saveDanmakuAreaFraction(danmakuAreaFraction)
+  }
+
+  fun updateDanmakuEnabled(enabled: Boolean) {
+    danmakuEnabled = enabled
+    subscriptionStore.saveDanmakuEnabled(enabled)
   }
 
   fun toggleTheme() {

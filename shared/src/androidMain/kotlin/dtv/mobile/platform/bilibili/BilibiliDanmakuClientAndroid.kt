@@ -421,7 +421,11 @@ class BilibiliDanmakuClientAndroid(
     }
 
     awaitClose {
-      runCatching { socketRef.getAndSet(null)?.close(1000, "close") }
+      // 用 cancel() 而不是 close(1000, ...)：close 是「关闭握手」，会等对端回 close 帧，
+      // 对端不回时靠 OkHttp RealWebSocket 内部 60s FINALIZE_TIMEOUT 才强制断开 ——
+      // 用户关掉弹幕/退出直播间后连接仍最长滞留 60s。
+      // 其它平台（抖音/Twitch/斗鱼/虎牙）用的都是 cancel()，这里对齐。
+      runCatching { socketRef.getAndSet(null)?.cancel() }
       job.cancel()
     }
   }

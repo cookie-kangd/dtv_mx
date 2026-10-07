@@ -32,7 +32,11 @@ class SubscriptionStoreAndroid(
   }
 
   override fun loadLandscapeDanmakuFontScale(): Float {
-    val raw = prefs.getFloat("landscape_danmaku_font_scale", 1.2f)
+    // 默认 1.15f（不是 1.2f）：播放设置里的档位只有 1.0 / 1.15 / 1.30 / 1.45，
+    // 默认值必须落在某个档位上，否则「横屏弹幕字体」一行会出现四个档位全不高亮，
+    // 用户既看不出当前字号、也不知道点哪个有效。历史上已写入 1.2f 的旧值同样
+    // 不命中任何档位，由播放设置里的就近高亮兜底（见 RowWrapFloat 的 snapToNearest）。
+    val raw = prefs.getFloat("landscape_danmaku_font_scale", 1.15f)
     return raw.coerceIn(0.85f, 2.0f)
   }
 
@@ -65,6 +69,13 @@ class SubscriptionStoreAndroid(
 
   override fun saveDanmakuAreaFraction(value: Float) {
     prefs.edit().putFloat("danmaku_area_fraction", value.coerceIn(0.25f, 1.0f)).apply()
+  }
+
+  override fun loadDanmakuEnabled(): Boolean =
+    prefs.getBoolean("danmaku_enabled", true)
+
+  override fun saveDanmakuEnabled(value: Boolean) {
+    prefs.edit().putBoolean("danmaku_enabled", value).apply()
   }
 
   override fun loadSubscribedPartitions(): List<SubscribedPartition> {

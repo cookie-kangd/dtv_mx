@@ -112,6 +112,8 @@ import dtv.mobile.ui.system.PlatformBackHandler
 import dtv.mobile.ui.system.rememberNotificationPermissionRequester
 import dtv.mobile.util.normalizeHttpUrl
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CancellationException
@@ -163,7 +165,10 @@ fun PlayerScreen(
   var twitchInfo by remember(streamer?.roomId) { mutableStateOf<TwitchPlayInfo?>(null) }
   var showSettings by remember(streamer?.roomId) { mutableStateOf(false) }
 
-  var danmakuEnabled by remember(streamer?.roomId) { mutableStateOf(true) }
+  // 弹幕总开关：与字体大小/透明度/显示区域一样走 AppState 持久化。
+  // 原来只是 remember(roomId) 的本地 state，关掉后退出房间再进来自己弹回「开」，
+  // 而同一面板里另外三项都记住了 —— 表现为「这开关没存住 / 失灵」。
+  val danmakuEnabled = appState.danmakuEnabled
   var danmakuMessages by remember(streamer?.roomId) { mutableStateOf<List<DanmakuMessage>>(emptyList()) }
   var danmakuMax by remember { mutableIntStateOf(200) }
   // 弹幕投放序号 / 本批新增条数：滚动弹幕靠 revision 判定「来了新弹幕」。
@@ -303,7 +308,7 @@ fun PlayerScreen(
         // （原画/蓝光/高清/标清），由解析器内部挑选正确 rate。
         // 关键：只「解析一次」并赋值 url——先播默认流再切档位正是造成"闪一下"的元凶。
         val initialQualityName = pickDouyuQualityName(appState.videoQuality)
-        runCatching {
+        guardedRunCatching {
           appState.repo.resolveDouyuStreamUrl(
             roomId = s.roomId,
             quality = initialQualityName,
@@ -313,7 +318,7 @@ fun PlayerScreen(
           url = resolvedUrl
           // 异步拉取可选清晰度/线路，仅用于设置面板展示与档位高亮，不参与起播，避免阻塞/闪烁
           scope.launch {
-            runCatching { appState.repo.fetchDouyuPlayInfo(roomId = s.roomId) }
+            guardedRunCatching { appState.repo.fetchDouyuPlayInfo(roomId = s.roomId) }
               .onSuccess { info ->
                 // 异步返回时可能已切到别的直播间：清晰度列表属于上一个房间，必须丢弃，
                 // 否则会把上一房间的档位高亮/线路写到新房间的设置面板上。
@@ -330,7 +335,7 @@ fun PlayerScreen(
         }.onFailure { error = it.message ?: "获取播放地址失败" }
       }
       Platform.Huya -> {
-        runCatching { appState.repo.resolveHuyaStreamUrl(roomId = s.roomId) }
+        guardedRunCatching { appState.repo.resolveHuyaStreamUrl(roomId = s.roomId) }
           .onSuccess { url = it }
           .onFailure { error = it.message ?: "获取虎牙播放地址失败" }
       }
@@ -339,7 +344,7 @@ fun PlayerScreen(
         if (selectedDouyinQuality == null) {
           selectedDouyinQuality = pickDouyinQuality(appState.videoQuality)
         }
-        runCatching {
+        guardedRunCatching {
           resolveDouyinWithFallback(
             repo = appState.repo,
             webRid = s.roomId,
@@ -355,7 +360,7 @@ fun PlayerScreen(
         if (selectedBilibiliQn == null) {
           selectedBilibiliQn = pickBilibiliQn(appState.videoQuality)
         }
-        runCatching {
+        guardedRunCatching {
           resolveBilibiliWithFallback(
             repo = appState.repo,
             roomId = s.roomId,
@@ -369,12 +374,12 @@ fun PlayerScreen(
       Platform.Twitch -> {
         // 默认 quality=null -> 返回 master m3u8，交给 ExoPlayer 自动码率适配（ABR），
         // 起播最快且不会因「设置里挑的档位该频道没有」而回退错档。
-        runCatching { appState.repo.resolveTwitchStreamUrl(login = s.roomId, quality = null) }
+        guardedRunCatching { appState.repo.resolveTwitchStreamUrl(login = s.roomId, quality = null) }
           .onSuccess { resolvedUrl ->
             url = resolvedUrl
             // 异步拉画质列表，仅用于设置面板展示
             scope.launch {
-              runCatching { appState.repo.fetchTwitchPlayInfo(login = s.roomId) }
+              guardedRunCatching { appState.repo.fetchTwitchPlayInfo(login = s.roomId) }
                 .onSuccess { info ->
                   if (currentRoomId.value != s.roomId) return@onSuccess
                   twitchInfo = info
@@ -394,11 +399,17 @@ fun PlayerScreen(
     derivedStateOf { appState.danmuBlockKeywords.map { it.lowercase() }.filter { it.isNotBlank() } }
   }
 
+  // 屏蔽词：走 rememberUpdatedState 而不是当LaunchedEffect 的 key。
+  // 原来把它放进 key 里，用户在设置里改一个屏蔽词就会把整条弹幕 WebSocket 拆掉重连
+  // （虎牙/抖音还要重拉整页房间 HTML），表现为「改个屏蔽词弹幕断几秒」。
+  // 这里改为在 collect 里读最新值：改词立即生效，且连接完全不动。
+  val blockKeywordsRef = rememberUpdatedState(blockKeywordsLower)
+
   LaunchedEffect(url) {
     if (url != null) playbackStarted = true
   }
 
-  LaunchedEffect(streamer?.roomId, streamer?.platform, danmakuEnabled, listenOnly, playbackStarted, blockKeywordsLower) {
+  LaunchedEffect(streamer?.roomId, streamer?.platform, danmakuEnabled, listenOnly, playbackStarted) {
     val s = streamer ?: return@LaunchedEffect
     // 熄屏听播开启时彻底断开弹幕连接：省掉 WebSocket 收包、列表重组与网络开销，
     // 让后台占用真正只剩一路音频解码。
@@ -443,9 +454,11 @@ fun PlayerScreen(
         }
         try {
           flow.collect { msg ->
-            if (blockKeywordsLower.isNotEmpty()) {
+            // 每条都读一次最新屏蔽词（委托读取开销可忽略），改词后无需重连即刻生效
+            val keywords = blockKeywordsRef.value
+            if (keywords.isNotEmpty()) {
               val contentLower = msg.content.lowercase()
-              if (blockKeywordsLower.any { contentLower.contains(it) }) return@collect
+              if (keywords.any { contentLower.contains(it) }) return@collect
             }
             pending.add(msg)
             // 突发弹幕攒够一批立即合并，避免缓冲区无限增长
@@ -477,26 +490,58 @@ fun PlayerScreen(
       url = null
       videoAspectRatio = null
       videoReady = false
-      val result = when (s.platform) {
-        Platform.Douyu -> runCatching {
-          appState.repo.resolveDouyuStreamUrl(
-            roomId = s.roomId,
-            quality = selectedDouyuRate,
-            cdn = selectedDouyuCdn,
-          )
+      // 无论成功、失败、还是被下一个请求取消（含切房早退），loading 都必须复位。
+      // 原来只在成功路径末尾写 loading = false，早退分支会漏掉 —— 万一哪条路径
+      // 没能被新房间的 LaunchedEffect 兜住，用户就会看到永久转圈。
+      var result: Result<String> = Result.failure(IllegalStateException("未知平台"))
+      try {
+        result = when (s.platform) {
+          Platform.Douyu -> guardedRunCatching {
+            appState.repo.resolveDouyuStreamUrl(
+              roomId = s.roomId,
+              quality = selectedDouyuRate,
+              cdn = selectedDouyuCdn,
+            )
+          }
+          Platform.Huya -> guardedRunCatching { appState.repo.resolveHuyaStreamUrl(roomId = s.roomId) }
+          // 抖音 / B站 走与首次进房同一套「逐级降档」链路，并回写实际生效档位。
+          // 原来这里直连 repo：① 高画质不可用（如B站原画需大会员）时直接报错播不出来，
+          //    而首次进房能自动降档成功，两者行为不一致；② repo 在请求档位不存在时会
+          //    静默回落到别的流，但 selectedXxx 不更新，chip 高亮的档位与实际播放不符
+          //    （表现为「选了标清，实际播的是原画」）。
+          Platform.Douyin -> guardedRunCatching {
+            resolveDouyinWithFallback(
+              repo = appState.repo,
+              webRid = s.roomId,
+              preferred = selectedDouyinQuality ?: "ORIGIN",
+            )
+          }.mapCatching { (resolvedUrl, actualQuality) ->
+            selectedDouyinQuality = actualQuality
+            resolvedUrl
+          }
+          Platform.Bilibili -> guardedRunCatching {
+            resolveBilibiliWithFallback(
+              repo = appState.repo,
+              roomId = s.roomId,
+              preferred = selectedBilibiliQn ?: 10000,
+            )
+          }.mapCatching { (resolvedUrl, actualQn) ->
+            selectedBilibiliQn = actualQn
+            resolvedUrl
+          }
+          Platform.Twitch -> guardedRunCatching { appState.repo.resolveTwitchStreamUrl(login = s.roomId, quality = selectedTwitchQuality) }
+          else -> Result.failure(IllegalStateException("暂不支持的平台：${s.platform.title}"))
         }
-        Platform.Huya -> runCatching { appState.repo.resolveHuyaStreamUrl(roomId = s.roomId) }
-        Platform.Douyin -> runCatching { appState.repo.resolveDouyinStreamUrl(webRid = s.roomId, desiredQuality = selectedDouyinQuality) }
-        Platform.Bilibili -> runCatching { appState.repo.resolveBilibiliStreamUrl(roomId = s.roomId, qn = selectedBilibiliQn) }
-        Platform.Twitch -> runCatching { appState.repo.resolveTwitchStreamUrl(login = s.roomId, quality = selectedTwitchQuality) }
-        else -> Result.failure(IllegalStateException("暂不支持的平台：${s.platform.title}"))
+        // 解析期间若已切到别的直播间，这份结果作废，交给新房间的解析流程赋值
+        if (currentRoomId.value != requestedRoomId) return@launch
+        result
+          .onSuccess { url = it }
+          .onFailure { error = it.message ?: "获取播放地址失败" }
+      } finally {
+        // 只在结果仍然属于当前房间时才复位 loading：切房后新房间的
+        // LaunchedEffect 会自己管 loading，这里不能去覆盖它的状态。
+        if (currentRoomId.value == requestedRoomId) loading = false
       }
-      // 解析期间若已切到别的直播间，这份结果作废，交给新房间的解析流程赋值
-      if (currentRoomId.value != requestedRoomId) return@launch
-      result
-        .onSuccess { url = it }
-        .onFailure { error = it.message ?: "获取播放地址失败" }
-      loading = false
     }
   }
   BoxWithConstraints(
@@ -568,14 +613,21 @@ fun PlayerScreen(
           Text("画质", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f))
           when (s.platform) {
             Platform.Douyu -> {
-              RowWrap(
-                items = playInfo?.variants.orEmpty().map { it.name to it.rate.toString() },
-                selected = selectedDouyuRate,
-                onSelect = {
-                  selectedDouyuRate = it
-                  reloadUrl()
-                },
-              )
+              // playInfo 是异步拉取的，网络慢时会有几秒空窗。空列表而不给任何提示，
+              // 用户看到「有画质标题、下面什么都没有」会以为面板坏了。
+              val douyuVariants = playInfo?.variants.orEmpty()
+              if (douyuVariants.isEmpty()) {
+                ChipPlaceholder("画质列表加载中…")
+              } else {
+                RowWrap(
+                  items = douyuVariants.map { it.name to it.rate.toString() },
+                  selected = selectedDouyuRate,
+                  onSelect = {
+                    selectedDouyuRate = it
+                    reloadUrl()
+                  },
+                )
+              }
             }
             Platform.Douyin -> {
               RowWrap(
@@ -641,7 +693,7 @@ fun PlayerScreen(
         RowWrap(
           items = listOf("开" to "on", "关" to "off"),
           selected = if (danmakuEnabled) "on" else "off",
-          onSelect = { danmakuEnabled = it == "on" },
+          onSelect = { appState.updateDanmakuEnabled(it == "on") },
         )
 
         Text("弹幕字体大小", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f))
@@ -681,7 +733,8 @@ fun PlayerScreen(
 
         if (isLandscapeLayout) {
           Text("横屏弹幕字体", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f))
-          RowWrapFloat(
+          // 用就近高亮版：历史默认值 1.2f 不命中任何档位，精确判据会让四个 chip 全灭。
+          RowWrapFloatSnap(
             items = listOf(
               "小" to 1.0f,
               "中" to 1.15f,
@@ -733,6 +786,24 @@ fun PlayerScreen(
       }
     }
 
+    // 关注状态：用 derivedStateOf 预先算好，避免 PlayerHeader 在组合期直接调
+    // AppState.isFollowed —— 那会遍历整张关注列表做字符串拼接，且让 header 订阅整个
+    // followedStreamers。播放页本来就每 120ms 因弹幕批重组一次，不做这层隔离的话
+    // 这点开销会被放大成「每次弹幕都重算一遍全量关注」。
+    val streamerFollowKey = remember(streamer) {
+      streamer?.let { "${it.platform.name}:${it.roomId}" }
+    }
+    val streamerFollowed by remember(streamerFollowKey) {
+      derivedStateOf { streamerFollowKey != null && appState.isFollowedKey(streamerFollowKey) }
+    }
+
+    // 竖屏时毛玻璃浮岛底栏悬浮在内容之上：弹幕列表底部需要预留出
+    // 导航条 + 浮岛的高度，避免最新弹幕被底栏遮住看不清。
+    // 提到 content lambda 外面声明：弹幕面板要按「可用高度比例」裁剪顶部留白，
+    // 必须先知道底部预留量才能算准。
+    val danmakuBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() +
+      DockContentClearance
+
     val content: @Composable () -> Unit = {
       // 横屏全屏或画中画时，视频都铺满容器并以黑色打底，保证 PiP 画面与横屏一致（不带入底部栏等杂色）。
       val isFullBleedVideo = fullscreen || isInPip
@@ -745,7 +816,7 @@ fun PlayerScreen(
           PlayerHeader(
             streamer = streamer,
             onBack = requestClose,
-            followed = streamer?.let(appState::isFollowed) == true,
+            followed = streamerFollowed,
             onToggleFollow = { s -> appState.toggleFollow(s) },
             modifier = Modifier.fillMaxWidth(),
           )
@@ -896,7 +967,7 @@ fun PlayerScreen(
               PlayerHeader(
                 streamer = streamer,
                 onBack = requestClose,
-                followed = streamer?.let(appState::isFollowed) == true,
+                followed = streamerFollowed,
                 onToggleFollow = { s -> appState.toggleFollow(s) },
                 modifier = Modifier
                   .align(Alignment.TopStart)
@@ -915,7 +986,11 @@ fun PlayerScreen(
                   newCount = danmakuNewCount,
                   showUser = false,
                   areaFraction = appState.danmakuAreaFraction,
-                  textScale = appState.landscapeDanmakuFontScale * appState.danmakuFontScale,
+                  // 只用「横屏弹幕字体」，不再乘全局的 danmakuFontScale。
+                  // 原来两个设置项在唯一消费点相乘：用户调竖屏列表字号，横屏滚动弹幕
+                  // 也会跟着变大（表现为「只改了一个，另一个也变了」）。
+                  // 现在两个设置各自独立、各管各的形态，符合直觉。
+                  textScale = appState.landscapeDanmakuFontScale,
                   opacity = appState.danmakuOpacity,
                   modifier = Modifier
                     .fillMaxSize()
@@ -974,22 +1049,29 @@ fun PlayerScreen(
 
         if (!fullscreen && !verticalFullBleed && !isInPip) {
           if (canShowDanmaku && isHorizontalVideo) {
-            HubDanmakuPanel(
-              messages = danmakuMessages,
-              revision = danmakuRevision,
-              enhancedPortrait = isPortraitLayout,
-              textScale = appState.danmakuFontScale,
+            // 外层 Box 用 weight(1f) 占满「视频下方的全部剩余空间」，
+            // 内层面板再按「弹幕显示区域」压缩高度并贴底对齐。
+            // 这样该开关在本模式（最常用）真正生效：上1/4 就是只留顶部 1/4 的高度给弹幕，
+            // 弹幕仍从底部往上堆叠、与底部预留（导航条 + 浮岛）严丝合缝，不会中间留空档。
+            Box(
               modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(top = 12.dp)
-                // 竖屏时毛玻璃浮岛底栏悬浮在内容之上：弹幕列表底部预留出
-                // 导航条 + 浮岛的高度，避免最新弹幕被底栏遮住看不清。
-                .padding(
-                  bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() +
-                    DockContentClearance,
-                ),
-            )
+                .weight(1f),
+            ) {
+              HubDanmakuPanel(
+                messages = danmakuMessages,
+                revision = danmakuRevision,
+                enhancedPortrait = isPortraitLayout,
+                textScale = appState.danmakuFontScale,
+                opacity = appState.danmakuOpacity,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .align(Alignment.BottomCenter)
+                  .fillMaxHeight(appState.danmakuAreaFraction)
+                  .padding(top = 12.dp)
+                  .padding(bottom = danmakuBottomInset),
+              )
+            }
           }
         }
       }
@@ -1680,6 +1762,10 @@ private fun HubDanmakuPanel(
   revision: Int = 0,
   enhancedPortrait: Boolean = false,
   textScale: Float = 1f,
+  // 「弹幕透明度」开关的落点。之前本面板没有这个参数，用户调了透明度，
+  // 竖屏列表弹幕（最常用模式）纹丝不动 —— 同一屏的另外两种弹幕形态却生效，
+  // 表现为「开关失灵」。现在与 DanmakuBubble 的 effectiveOpacity 用同一套夹取。
+  opacity: Float = 1f,
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
@@ -1830,6 +1916,7 @@ private fun HubDanmakuPanel(
           content = msg.content.trim(),
           enhancedPortrait = enhancedPortrait,
           textScale = textScale,
+          opacity = opacity,
         )
       }
     }
@@ -1863,13 +1950,21 @@ private fun HubDanmakuRow(
   content: String,
   enhancedPortrait: Boolean = false,
   textScale: Float = 1f,
+  // 「弹幕透明度」开关的落点：与 DanmakuBubble 的 effectiveOpacity 同一套夹取，
+  // 保证「竖屏列表 / 竖屏视频浮层 / 横屏滚动」三种形态的透明度观感一致。
+  opacity: Float = 1f,
   modifier: Modifier = Modifier,
 ) {
+  val effectiveOpacity = opacity.coerceIn(0.35f, 1.0f)
   val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
   val userChipBg = if (isDark) Color.White.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface
   val userChipBorder = if (isDark) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f))
-  val userFg = MaterialTheme.colorScheme.primary.copy(alpha = if (isDark) 0.72f else 0.90f)
-  val contentFg = if (isDark) Color.White.copy(alpha = 0.84f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+  val userFg = MaterialTheme.colorScheme.primary.copy(alpha = (if (isDark) 0.72f else 0.90f) * effectiveOpacity)
+  val contentFg = if (isDark) {
+    Color.White.copy(alpha = 0.84f * effectiveOpacity)
+  } else {
+    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f * effectiveOpacity)
+  }
 
   Row(
     modifier = modifier.fillMaxWidth(),
@@ -1967,10 +2062,18 @@ private fun ScrollingDanmakuOverlay(
       .coerceAtLeast(1f)
     val trackStepPx = (minTrackHeightPx + trackGapPx).coerceAtLeast(1f)
     val trackCount = (usableHeightPx / trackStepPx).toInt().coerceIn(1, 24)
-    val active = remember(resetKey, trackCount) { mutableStateListOf<Active>() }
+    // 正在飞行的弹幕列表：只按房间切换（resetKey）重建。
+    // 之前这里还带了 trackCount，于是用户调「弹幕显示区域」或「弹幕字体大小」时
+    // trackCount 变化 → active 被重置成空列表 → 屏幕上正在滚的弹幕集体瞬间消失，
+    // 还要等下一批新弹幕才恢复（安静房间可能好几秒）—— 表现为「一动设置弹幕就没了」。
+    // 轨道数只影响「新弹幕往后排第几轨」，不影响已在飞的弹幕，故不进 key。
+    val active = remember(resetKey) { mutableStateListOf<Active>() }
+    // 轨道占用表长度必须跟着 trackCount 走（索引要落在轨道数内），这个必须重建。
     val laneAvailableAt = remember(resetKey, trackCount) { MutableList(trackCount) { 0L } }
-    // 弹幕 key 的自增序号：随轨道数一起重置即可，保证同一批次内不会撞 key。
-    val activeIdSeq = remember(resetKey, trackCount) { longArrayOf(0L) }
+    // 弹幕 key 的自增序号：只随房间切换重置。
+    // 绝不能跟 trackCount 一起重置 —— 那样正在飞行的弹幕 id 会与新投放的弹幕撞 key，
+    // Compose 会直接抛 "Key was already used" 崩溃。
+    val activeIdSeq = remember(resetKey) { longArrayOf(0L) }
 
     fun estimatedTextWidthPx(user: String, content: String): Float {
       val text = if (showUser) "$user  $content" else content
@@ -2115,6 +2218,26 @@ private fun SpacerLine(height: androidx.compose.ui.unit.Dp = 10.dp) {
   androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(height))
 }
 
+/** 异步列表还没回来的占位：避免出现「有标题、下面空无一物」被误认成面板坏了。 */
+@Composable
+private fun ChipPlaceholder(text: String) {
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    CircularProgressIndicator(
+      modifier = Modifier.size(14.dp),
+      strokeWidth = 2.dp,
+      color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+    )
+    Text(
+      text = text,
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+    )
+  }
+}
+
 @Composable
 private fun RowWrap(
   items: List<Pair<String, String?>>,
@@ -2178,6 +2301,43 @@ private fun RowWrapFloat(
   }
 }
 
+/**
+ * 与 [RowWrapFloat] 相同，但当 [selected] 不精确命中任何档位时，高亮**距离最近**的那一档。
+ *
+ * 用于「横屏弹幕字体」这类默认值可能来自历史数据的设置项：老版本默认 1.2f、
+ * 而档位是 1.0/1.15/1.30/1.45，用精确判据会出现「四个档位全不高亮」——
+ * 用户既看不出当前字号，也判断不了哪个档位生效，实质上是开关失灵。
+ * 就近高亮让 UI 始终能如实反映当前值。
+ */
+@Composable
+private fun RowWrapFloatSnap(
+  items: List<Pair<String, Float>>,
+  selected: Float,
+  onSelect: (Float) -> Unit,
+) {
+  val nearestIndex = remember(items, selected) {
+    if (items.isEmpty()) {
+      0
+    } else {
+      items.indices.minByOrNull { i ->
+        val d = items[i].second - selected
+        if (d < 0f) -d else d
+      } ?: 0
+    }
+  }
+  LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    items(items.size, key = { it }) { index ->
+      val (label, value) = items[index]
+      val exact = (value - selected).let { if (it < 0f) -it else it } < 0.0001f
+      FilterChip(
+        selected = exact || index == nearestIndex,
+        onClick = { onSelect(value) },
+        label = { Text(label) },
+      )
+    }
+  }
+}
+
 /** 抖音清晰度，从低到高 */
 private val DOUYIN_QUALITY_ASC = listOf("SD1", "HD1", "FULL_HD1", "ORIGIN")
 
@@ -2232,6 +2392,27 @@ private fun pickBilibiliQn(quality: VideoQuality): Int = when (quality) {
 }
 
 /**
+ * 会吞掉 `CancellationException` 的 [runCatching] 是协程里的陷阱：
+ * `runCatching` 捕获的是 `Throwable`，协程被 `cancel()` 抛出的 `CancellationException`
+ * 也会被吞掉，导致「取消后代码继续往下跑」——
+ *
+ * - 在 [resolveDouyinWithFallback] / [resolveBilibiliWithFallback] 的降档循环里，
+ *   协程已取消时每次请求都会在第一个挂起点立刻抛取消异常 → 被吞 → 循环继续跑完
+ *   剩余 3~4 档，白白发掉 3~4 次网络请求；
+ * - 在 [reloadUrl] 里则会把 "Job was cancelled" 当成真实错误写进 `error`。
+ *
+ * 这里保留「业务异常照旧捕获」的语义，但让取消异常原样抛出去（协程的标准做法）。
+ */
+private inline fun <T> guardedRunCatching(block: () -> T): Result<T> =
+  try {
+    Result.success(block())
+  } catch (t: CancellationException) {
+    throw t
+  } catch (t: Throwable) {
+    Result.failure(t)
+  }
+
+/**
  * 抖音：从首选档位开始，失败则逐级降低清晰度，返回 (播放地址, 实际生效档位)。
  */
 private suspend fun resolveDouyinWithFallback(
@@ -2247,8 +2428,10 @@ private suspend fun resolveDouyinWithFallback(
     .let { if (it >= 0) it else DOUYIN_QUALITY_ASC.lastIndex }
   var lastErr: Throwable? = null
   for (i in start downTo 0) {
+    // 已被取消（连点切换画质 / 切房）立刻退出，绝不继续空转后面的降档请求
+    currentCoroutineContext().ensureActive()
     val q = DOUYIN_QUALITY_ASC[i]
-    runCatching { repo.resolveDouyinStreamUrl(webRid = webRid, desiredQuality = q) }
+    guardedRunCatching { repo.resolveDouyinStreamUrl(webRid = webRid, desiredQuality = q) }
       .onSuccess { return it to q }
       .onFailure { lastErr = it }
   }
@@ -2271,8 +2454,10 @@ private suspend fun resolveBilibiliWithFallback(
     .let { if (it >= 0) it else BILIBILI_QN_ASC.lastIndex }
   var lastErr: Throwable? = null
   for (i in start downTo 0) {
+    // 同上：取消后不再空转剩余降档请求
+    currentCoroutineContext().ensureActive()
     val qn = BILIBILI_QN_ASC[i]
-    runCatching { repo.resolveBilibiliStreamUrl(roomId = roomId, qn = qn) }
+    guardedRunCatching { repo.resolveBilibiliStreamUrl(roomId = roomId, qn = qn) }
       .onSuccess { return it to qn }
       .onFailure { lastErr = it }
   }
