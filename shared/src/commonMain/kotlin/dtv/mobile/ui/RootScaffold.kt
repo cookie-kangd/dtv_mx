@@ -130,7 +130,10 @@ fun RootScaffold(appState: AppState) {
     // 底栏浮岛 overlay 在内容之上；列表通过自身 contentPadding 预留浮岛高度，
     // 保证最后一张卡片能完整滚出浮岛区域。haze 源注册在内容层上，
     // 使浮岛能对其背后的滚动内容做实时模糊（毛玻璃）。
-    val showDock = !(appState.currentScreen == Screen.Player && appState.playerFullscreen)
+    // 只在横屏全屏（或画中画）隐藏底栏；竖屏全屏仍保留底栏。
+    // playerDockHidden 由 PlayerScreen 按真实可用宽高计算，避免把“全屏状态”
+    // 误当成“横屏状态”而把竖屏底栏一起隐藏。
+    val showDock = !(appState.currentScreen == Screen.Player && appState.playerDockHidden)
     val hazeState = remember { HazeState() }
     CompositionLocalProvider(LocalGlassHaze provides hazeState) {
       Box(modifier = Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
@@ -148,7 +151,11 @@ fun RootScaffold(appState: AppState) {
           }
         },
         label = "screen",
-        modifier = Modifier.fillMaxSize().haze(hazeState),
+        // 底栏隐藏时不再注册 haze 源。全屏播放不再为不可见的毛玻璃维护离屏
+        // 模糊/合成图层，少一层 GPU 采样与中间纹理。
+        modifier = Modifier
+          .fillMaxSize()
+          .then(if (showDock) Modifier.haze(hazeState) else Modifier),
       ) { screen ->
         when (screen) {
           Screen.Home -> HomeScreen(

@@ -1195,7 +1195,7 @@ private fun BasicSettingsSection(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text("屏幕高刷", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
           Text(
-            text = "开启后使用系统最高刷新率（高刷屏 90/120/144Hz 生效，滑动与动画更流畅）；关闭则锁定 60Hz 标准刷新率，更省电。切换瞬间可能有一次轻微闪烁，属正常现象。",
+            text = "开启后普通页面使用系统最高刷新率（高刷屏 90/120/144Hz 生效，滑动与动画更流畅）；播放页会自动使用 60Hz 以降低功耗。关闭后全局锁定 60Hz 标准刷新率，更省电。切换瞬间可能有一次轻微闪烁，属正常现象。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
           )

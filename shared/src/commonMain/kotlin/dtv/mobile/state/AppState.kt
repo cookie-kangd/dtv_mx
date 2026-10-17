@@ -90,6 +90,14 @@ class AppState(
   private var playerReturnScreen: Screen? by mutableStateOf(null)
   private var settingsReturnScreen: Screen? by mutableStateOf(null)
   var playerFullscreen: Boolean by mutableStateOf(false)
+  /**
+   * 播放页是否应隐藏悬浮底栏。
+   *
+   * 不能直接复用 [playerFullscreen]：竖屏视频（竖屏全屏铺满）同样可能处于
+   * fullscreen 状态，但产品要求竖屏时仍保留底栏；只有横屏全屏和系统画中画
+   * 才隐藏。由 PlayerScreen 结合真实横竖屏尺寸写入。
+   */
+  var playerDockHidden: Boolean by mutableStateOf(false)
   var currentPartition: SubscribedPartition? by mutableStateOf(null)
 
   /** 顶栏右侧「板块下拉菜单」状态，由当前平台页在组合期间写入，HubTopBar 读取渲染。 */
@@ -493,6 +501,7 @@ class AppState(
       // 避免旧直播间信息/全屏状态跨平台残留占用内存或误导后续返回逻辑。
       playerReturnScreen = null
       playerFullscreen = false
+      playerDockHidden = false
     }
     currentScreen = Screen.Platform
   }
@@ -503,6 +512,7 @@ class AppState(
     currentPartition = partition
     currentScreen = Screen.Player
     playerFullscreen = false
+    playerDockHidden = false
     // 进播放页时平台页会被 AnimatedContent 整页销毁，但 categoryMenu 里的
     // onSelect 是闭包，捕获了平台页的分类树与状态。AppState 是进程级长生命周期对象，
     // 不清就会一直挂着这棵分类树（虎牙/B站各 6~7 万行 JSON 解析后的对象树，可达数百 KB）
@@ -524,6 +534,7 @@ class AppState(
         playerReturnScreen = null
         currentStreamer = null
         playerFullscreen = false
+        playerDockHidden = false
       }
       Screen.Settings -> {
         currentScreen = settingsReturnScreen ?: Screen.Home

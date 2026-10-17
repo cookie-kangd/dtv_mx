@@ -150,8 +150,10 @@ class DtvApplication : Application(), ImageLoaderFactory {
 
   private fun buildImageLoader(): ImageLoader =
     ImageLoader.Builder(this)
-      // 内存缓存占可用内存 20%，长列表滚动复用位图不反复解码
-      .memoryCache { MemoryCache.Builder(this).maxSizePercent(0.20).build() }
+      // 内存缓存占可用内存 15%。20% 在 6/8GB 机型上会长期占住上百 MB，
+      // 与 ExoPlayer 的直播缓冲叠加后更容易触发 GC；15% 仍足够覆盖一屏
+      // 封面/头像的往返复用，在流畅度与常驻内存之间更平衡。
+      .memoryCache { MemoryCache.Builder(this).maxSizePercent(0.15).build() }
       // 直播平台 CDN 普遍下发 no-store/短缓存头；忽略这些头让磁盘缓存始终生效，
       // 二次进入分区/搜索页封面直接命中缓存，滚动明显更流畅
       .respectCacheHeaders(false)

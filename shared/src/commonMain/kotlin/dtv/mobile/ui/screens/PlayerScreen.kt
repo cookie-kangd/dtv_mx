@@ -107,6 +107,7 @@ import dtv.mobile.ui.components.DtvCardDefaults
 import dtv.mobile.ui.components.NetworkImage
 import dtv.mobile.ui.player.PictureInPicture
 import dtv.mobile.ui.player.StreamPlayer
+import dtv.mobile.ui.system.AppForegroundEffect
 import dtv.mobile.ui.system.FullscreenEffect
 import dtv.mobile.ui.system.PlatformBackHandler
 import dtv.mobile.ui.system.rememberNotificationPermissionRequester
@@ -120,6 +121,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.takeWhile
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyColumn
@@ -178,10 +183,29 @@ fun PlayerScreen(
   var danmakuNewCount by remember(streamer?.roomId) { mutableIntStateOf(0) }
   val mergeDanmakuBatch: (List<DanmakuMessage>) -> Unit = { batch ->
     if (batch.isNotEmpty()) {
-      danmakuMessages = (danmakuMessages + batch).takeLast(danmakuMax)
-      danmakuNewCount = batch.size.coerceAtMost(danmakuMax)
+      // 只分配一次列表：旧实现先 `danmakuMessages + batch` 再 `takeLast`
+      // 会产生两个完整 List，热门房每 120ms 一次。这里用 subList 视图
+      // 拼出最终快照，避免中间列表与额外 O(n) 拷贝。
+      val incoming = if (batch.size > danmakuMax) {
+        batch.subList(batch.size - danmakuMax, batch.size)
+      } else {
+        batch
+      }
+      val keep = (danmakuMax - incoming.size).coerceAtLeast(0)
+      val firstKeep = (danmakuMessages.size - keep).coerceAtLeast(0)
+      val next = ArrayList<DanmakuMessage>(keep + incoming.size)
+      if (keep > 0) next.addAll(danmakuMessages.subList(firstKeep, danmakuMessages.size))
+      next.addAll(incoming)
+      danmakuMessages = next
+      danmakuNewCount = incoming.size
       danmakuRevision += 1
     }
+  }
+  val appForegroundFlow = remember { MutableStateFlow(true) }
+  var appInForeground by remember { mutableStateOf(true) }
+  AppForegroundEffect {
+    appInForeground = it
+    appForegroundFlow.value = it
   }
   // 「熄屏听播」（播放器右侧耳机按钮）：仅作用于当前直播间，退出即自动关闭，不做持久化
   var listenOnly by remember(streamer?.roomId) { mutableStateOf(false) }
@@ -222,10 +246,10 @@ fun PlayerScreen(
   val isInPip by PictureInPicture.isInPictureInPictureMode
 
   DisposableEffect(Unit) {
-    onDispose { appState.playerFullscreen = false }
-  }
-  LaunchedEffect(fullscreen) {
-    appState.playerFullscreen = fullscreen
+    onDispose {
+      appState.playerFullscreen = false
+      appState.playerDockHidden = false
+    }
   }
 
   // 横屏全屏时左上角的「X」：仅退出全屏回到竖屏，不关闭播放器。
@@ -409,8 +433,21 @@ fun PlayerScreen(
     if (url != null) playbackStarted = true
   }
 
-  LaunchedEffect(streamer?.roomId, streamer?.platform, danmakuEnabled, listenOnly, playbackStarted) {
+  LaunchedEffect(
+    streamer?.roomId,
+    streamer?.platform,
+    danmakuEnabled,
+    listenOnly,
+    playbackStarted,
+    appInForeground,
+  ) {
     val s = streamer ?: return@LaunchedEffect
+    // 普通观看切到后台时，播放器会暂停；弹幕连接和动画也一并停掉，
+    // 避免不可见页面继续收包、解压、过滤和重组。画中画仍属于前台。
+    if (!appInForeground) {
+      danmakuMessages = emptyList()
+      return@LaunchedEffect
+    }
     // 熄屏听播开启时彻底断开弹幕连接：省掉 WebSocket 收包、列表重组与网络开销，
     // 让后台占用真正只剩一路音频解码。
     if (!danmakuEnabled || listenOnly) {
@@ -432,6 +469,12 @@ fun PlayerScreen(
       Platform.Twitch -> appState.repo.observeTwitchDanmaku(s.roomId)
       else -> null
     } ?: return@LaunchedEffect
+    // 直接监听 StateFlow 而不是只依赖重组：应用退到后台时即使 Compose
+    // 暂时没有机会重组，弹幕上游也会立即收到 false 并结束收集。
+    val foregroundGuardedFlow = flow
+      .combine(appForegroundFlow) { message, foreground -> message.takeIf { foreground } }
+      .takeWhile { it != null }
+      .filterNotNull()
 
     danmakuMessages = emptyList()
     try {
@@ -451,12 +494,11 @@ fun PlayerScreen(
           if (keywords.isEmpty()) {
             mergeDanmakuBatch(pending)
           } else {
-            mergeDanmakuBatch(
-              pending.filterNot { m ->
-                val lower = m.content.lowercase()
-                keywords.any { lower.contains(it) }
-              },
-            )
+            pending.removeAll { m ->
+              val lower = m.content.lowercase()
+              keywords.any { lower.contains(it) }
+            }
+            mergeDanmakuBatch(pending)
           }
           pending.clear()
         }
@@ -468,7 +510,7 @@ fun PlayerScreen(
           }
         }
         try {
-          flow.collect { msg ->
+          foregroundGuardedFlow.collect { msg ->
             // 每条都读一次最新屏蔽词（委托读取开销可忽略），改词后无需重连即刻生效
             val keywords = blockKeywordsRef.value
             if (keywords.isNotEmpty()) {
@@ -484,7 +526,7 @@ fun PlayerScreen(
           // 取消路径（关弹幕 / 开熄屏听播 / 切房 / 切平台）下**不能再写 UI**：
           // 新的 effect 刚把列表清空（danmakuMessages = emptyList()），这里补一批
           // 会让「已经关掉的弹幕」又闪回来。只有正常结束才排水。
-          if (currentCoroutineContext().isActive) flushPending()
+          if (currentCoroutineContext().isActive && appForegroundFlow.value) flushPending()
           pending.clear()
         }
       }
@@ -569,6 +611,19 @@ fun PlayerScreen(
   ) {
     val isPortraitLayout = maxHeight >= maxWidth
     val isLandscapeLayout = !isPortraitLayout
+
+    // 底栏隐藏条件必须同时看“全屏”和“真实横屏”：
+    // - 横屏全屏：隐藏底栏，画面真正铺满；
+    // - 竖屏全屏/竖屏视频铺满：保留底栏；
+    // - 系统画中画：无论窗口比例都隐藏，保证 PiP 只包含视频。
+    SideEffect {
+      appState.playerFullscreen = fullscreen
+      appState.playerDockHidden = shouldHidePlayerDock(
+        fullscreen = fullscreen,
+        isLandscape = isLandscapeLayout,
+        isInPictureInPicture = isInPip,
+      )
+    }
 
     // 未开启「默认横屏」时，若进房瞬间设备就是横屏（平板），强制锁定竖屏：
     // 进直播间不再跟随系统方向，退出一次即可回到竖屏（无需退出两次）。

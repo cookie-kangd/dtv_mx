@@ -9,6 +9,7 @@ import dtv.mobile.repo.DtvRepository
 import dtv.mobile.repo.fake.FakeDtvRepository
 import dtv.mobile.state.InMemorySubscriptionStore
 import dtv.mobile.state.LocalVideoQuality
+import dtv.mobile.state.Screen
 import dtv.mobile.state.rememberAppState
 import dtv.mobile.state.SubscriptionStore
 import dtv.mobile.theme.DtvTheme
@@ -32,8 +33,13 @@ fun App(
       LocalVideoQuality provides appState.videoQuality,
     ) {
       Surface(modifier = Modifier.fillMaxSize()) {
-        // 屏幕刷新率适配：默认跟随系统最高刷新率，可在「设置-基本设置」关闭为 60Hz
-        HighRefreshRateEffect(enabled = appState.highRefreshEnabled)
+        // 屏幕刷新率适配：
+        // - 普通页面按用户设置决定是否跟随系统最高刷新率；
+        // - 播放页固定 60Hz。直播绝大多数是 30/60fps，继续以 90/120/144Hz
+        //   扫描输出只会增加 GPU/显示功耗，不会增加实际画面帧数。
+        HighRefreshRateEffect(
+          enabled = appState.highRefreshEnabled && appState.currentScreen != Screen.Player,
+        )
         DtvBackground { RootScaffold(appState = appState) }
       }
     }

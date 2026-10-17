@@ -31,6 +31,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dtv.mobile.state.LocalVideoQuality
 import dtv.mobile.state.VideoQuality
 import dtv.mobile.util.AppLog
@@ -203,6 +206,7 @@ actual fun StreamPlayer(
   modifier: Modifier,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val quality = LocalVideoQuality.current
   // 兜底：构建播放器的任何一步失败都不允许把 App 带崩，
   // 失败时降级为"零可选配置"的最简播放器继续起播。
@@ -241,6 +245,28 @@ actual fun StreamPlayer(
       if (backgroundAudio) {
         BackgroundAudioController.release(context)
       }
+    }
+  }
+
+  // 普通观看时按 Home / 锁屏立即暂停解码和网络读取；只有用户显式开启
+  // 「熄屏听播」才允许后台继续音频。这里直接挂 LifecycleObserver，不能等
+  // Compose 重组——Activity 已经 STOPPED 时，重组可能延后到下次回前台。
+  DisposableEffect(player, lifecycleOwner, backgroundAudio) {
+    val observer = LifecycleEventObserver { _, event ->
+      when (event) {
+        Lifecycle.Event.ON_START -> player.play()
+        Lifecycle.Event.ON_STOP -> if (!backgroundAudio) player.pause()
+        else -> Unit
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) || backgroundAudio) {
+      player.play()
+    } else {
+      player.pause()
+    }
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
     }
   }
 
@@ -342,7 +368,9 @@ actual fun StreamPlayer(
         PlayerView(it).apply {
           useController = false
           controllerAutoShow = false
-          setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+          // 播放页已经有自己的加载指示器；PlayerView 再叠一个缓冲转圈会产生
+          // 重复动画与无意义的 View 重绘。
+          setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
           resizeMode = if (zoomToFill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
           // Keep screen on during playback (some Android 16 devices will otherwise follow a short system timeout).
           keepScreenOn = true
