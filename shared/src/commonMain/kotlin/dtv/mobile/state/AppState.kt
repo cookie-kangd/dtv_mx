@@ -89,7 +89,6 @@ class AppState(
   var currentStreamer: Streamer? by mutableStateOf(null)
   private var playerReturnScreen: Screen? by mutableStateOf(null)
   private var settingsReturnScreen: Screen? by mutableStateOf(null)
-  var playerFullscreen: Boolean by mutableStateOf(false)
   /**
    * 播放页是否应隐藏悬浮底栏。
    *
@@ -499,7 +498,6 @@ class AppState(
       // 的 DisposableEffect 兜底），这里负责把 AppState 侧的引用一并清干净，
       // 避免旧直播间信息/全屏状态跨平台残留占用内存或误导后续返回逻辑。
       playerReturnScreen = null
-      playerFullscreen = false
       playerDockHidden = false
     }
     currentScreen = Screen.Platform
@@ -510,7 +508,6 @@ class AppState(
     currentStreamer = streamer
     currentPartition = partition
     currentScreen = Screen.Player
-    playerFullscreen = false
     playerDockHidden = false
     // 进播放页时平台页会被 AnimatedContent 整页销毁，但 categoryMenu 里的
     // onSelect 是闭包，捕获了平台页的分类树与状态。AppState 是进程级长生命周期对象，
@@ -532,7 +529,6 @@ class AppState(
         currentScreen = playerReturnScreen ?: Screen.Home
         playerReturnScreen = null
         currentStreamer = null
-        playerFullscreen = false
         playerDockHidden = false
       }
       Screen.Settings -> {

@@ -247,7 +247,6 @@ fun PlayerScreen(
 
   DisposableEffect(Unit) {
     onDispose {
-      appState.playerFullscreen = false
       appState.playerDockHidden = false
     }
   }
@@ -265,27 +264,10 @@ fun PlayerScreen(
     }
   }
 
-  // 画中画：进入前隐藏底部切换栏（playerFullscreen=true），使 PiP 画面只含视频，
-  // 与横屏全屏下的画中画一致；退出 PiP 时再恢复原值。
-  // 注意：enter() 的进入结果由系统异步回调 onPictureInPictureModeChanged 上报，
-  // 因此仅在 enter() 返回 true（已提交进入）时才翻转 playerFullscreen，
-  // 避免「按下就先隐藏底栏、但进入失败」造成的状态残留；退出 PiP 时统一在
-  // LaunchedEffect 里把 playerFullscreen 恢复原值并清空标记。
-  val pipPriorFullscreen = remember { mutableStateOf<Boolean?>(null) }
+  // 画中画窗口由 playerDockHidden 统一处理（isInPip=true 时隐藏底栏），
+  // 不再额外改写全局全屏状态，避免 PiP 与横/竖屏全屏互相覆盖。
   val enterPip: () -> Unit = {
-    val ok = PictureInPicture.enter(videoAspectRatio?.takeIf { it > 0f } ?: (16f / 9f))
-    if (ok) {
-      pipPriorFullscreen.value = appState.playerFullscreen
-      appState.playerFullscreen = true
-    }
-  }
-  LaunchedEffect(isInPip) {
-    if (!isInPip) {
-      // 退出画中画：无论之前是否成功进入，都复位 playerFullscreen 并清空残留标记，
-      // 防止再次点击全屏时叠加上一次 PiP 的旧状态而触发异常。
-      pipPriorFullscreen.value?.let { appState.playerFullscreen = it }
-      pipPriorFullscreen.value = null
-    }
+    PictureInPicture.enter(videoAspectRatio?.takeIf { it > 0f } ?: (16f / 9f))
   }
 
   // 关闭直播间（X 按钮 / 直接退出）时，若正处于手动横屏（含「默认横屏」进入），
@@ -622,7 +604,6 @@ fun PlayerScreen(
     // 横屏全屏、竖屏全屏以及竖屏视频铺满播放时都隐藏底栏；
     // 系统画中画也无条件隐藏，保证窗口里只包含视频。
     SideEffect {
-      appState.playerFullscreen = fullscreen
       appState.playerDockHidden = shouldHidePlayerDock(
         fullscreen = fullscreen,
         isVerticalFullBleed = verticalFullBleed,
@@ -1101,8 +1082,6 @@ fun PlayerScreen(
                 showFullscreen = isVideoAspectKnown && !isVerticalVideo,
                 onToggleFullscreen = {
                   if (!isClosing) {
-                    // 清空画中画残留标记，避免与本次全屏切换叠加导致状态异常
-                    pipPriorFullscreen.value = null
                     if (fullscreen) {
                       fullscreen = false
                       fullscreenEntry = if (isLandscapeLayout) FullscreenEntry.ManualOff else FullscreenEntry.None
