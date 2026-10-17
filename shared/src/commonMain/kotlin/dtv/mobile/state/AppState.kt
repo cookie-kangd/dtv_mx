@@ -93,9 +93,8 @@ class AppState(
   /**
    * 播放页是否应隐藏悬浮底栏。
    *
-   * 不能直接复用 [playerFullscreen]：竖屏视频（竖屏全屏铺满）同样可能处于
-   * fullscreen 状态，但产品要求竖屏时仍保留底栏；只有横屏全屏和系统画中画
-   * 才隐藏。由 PlayerScreen 结合真实横竖屏尺寸写入。
+   * 横屏全屏、竖屏全屏、竖屏视频铺满以及系统画中画都隐藏。
+   * 由 PlayerScreen 结合实际播放状态写入。
    */
   var playerDockHidden: Boolean by mutableStateOf(false)
   var currentPartition: SubscribedPartition? by mutableStateOf(null)

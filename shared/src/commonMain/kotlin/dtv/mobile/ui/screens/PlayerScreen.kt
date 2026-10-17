@@ -612,15 +612,20 @@ fun PlayerScreen(
     val isPortraitLayout = maxHeight >= maxWidth
     val isLandscapeLayout = !isPortraitLayout
 
-    // 底栏隐藏条件必须同时看“全屏”和“真实横屏”：
-    // - 横屏全屏：隐藏底栏，画面真正铺满；
-    // - 竖屏全屏/竖屏视频铺满：保留底栏；
-    // - 系统画中画：无论窗口比例都隐藏，保证 PiP 只包含视频。
+    val effectiveAspect = videoAspectRatio?.takeIf { it > 0f }
+    val isVideoAspectKnown = effectiveAspect != null
+    val layoutAspect = effectiveAspect ?: (16f / 9f)
+    val isVerticalVideo = isVideoAspectKnown && (effectiveAspect!! < 1f)
+    val isHorizontalVideo = isVideoAspectKnown && !isVerticalVideo
+    val verticalFullBleed = !fullscreen && isVerticalVideo
+
+    // 横屏全屏、竖屏全屏以及竖屏视频铺满播放时都隐藏底栏；
+    // 系统画中画也无条件隐藏，保证窗口里只包含视频。
     SideEffect {
       appState.playerFullscreen = fullscreen
       appState.playerDockHidden = shouldHidePlayerDock(
         fullscreen = fullscreen,
-        isLandscape = isLandscapeLayout,
+        isVerticalFullBleed = verticalFullBleed,
         isInPictureInPicture = isInPip,
       )
     }
@@ -827,12 +832,6 @@ fun PlayerScreen(
 
     PlatformBackHandler(enabled = showSettingsDrawer || showSettingsSheet) { showSettings = false }
 
-    val effectiveAspect = videoAspectRatio?.takeIf { it > 0f }
-    val isVideoAspectKnown = effectiveAspect != null
-    val layoutAspect = effectiveAspect ?: (16f / 9f)
-    val isVerticalVideo = isVideoAspectKnown && (effectiveAspect!! < 1f)
-    val isHorizontalVideo = isVideoAspectKnown && !isVerticalVideo
-    val verticalFullBleed = !fullscreen && isVerticalVideo
     val showFullPageLoading = !fullscreen &&
       !verticalFullBleed &&
       !isInPip &&

@@ -6,11 +6,11 @@ import kotlin.test.assertTrue
 
 class PlayerChromePolicyTest {
   @Test
-  fun portraitFullscreenKeepsDock() {
-    assertFalse(
+  fun portraitFullscreenHidesDock() {
+    assertTrue(
       shouldHidePlayerDock(
         fullscreen = true,
-        isLandscape = false,
+        isVerticalFullBleed = false,
         isInPictureInPicture = false,
       ),
     )
@@ -21,18 +21,29 @@ class PlayerChromePolicyTest {
     assertTrue(
       shouldHidePlayerDock(
         fullscreen = true,
-        isLandscape = true,
+        isVerticalFullBleed = false,
         isInPictureInPicture = false,
       ),
     )
   }
 
   @Test
-  fun landscapeWithoutFullscreenKeepsDock() {
+  fun verticalFullBleedHidesDock() {
+    assertTrue(
+      shouldHidePlayerDock(
+        fullscreen = false,
+        isVerticalFullBleed = true,
+        isInPictureInPicture = false,
+      ),
+    )
+  }
+
+  @Test
+  fun normalPortraitPlaybackKeepsDock() {
     assertFalse(
       shouldHidePlayerDock(
         fullscreen = false,
-        isLandscape = true,
+        isVerticalFullBleed = false,
         isInPictureInPicture = false,
       ),
     )
@@ -43,7 +54,7 @@ class PlayerChromePolicyTest {
     assertTrue(
       shouldHidePlayerDock(
         fullscreen = false,
-        isLandscape = false,
+        isVerticalFullBleed = false,
         isInPictureInPicture = true,
       ),
     )
