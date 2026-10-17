@@ -61,7 +61,6 @@ kotlin {
         // 故锁定 1.15.0（项目基线，稳定且与 AGP 8.5.2 兼容）。
         implementation("androidx.core:core-ktx:1.15.0")
         implementation("androidx.activity:activity-compose:1.10.1")
-        implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
 
         // 暂不升级：media3-ui 1.11.1 的 Gradle module 元数据里带 kotlin-stdlib:2.2.10，
         // 而本工程 Kotlin 编译器是 2.0.21，会直接报

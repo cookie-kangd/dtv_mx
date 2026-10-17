@@ -1,10 +1,8 @@
 package dtv.mobile.ui.player
-import dtv.mobile.platform.Env2
-import dtv.mobile.platform.Env1
-import dtv.mobile.platform.Env3
-import dtv.mobile.platform.Env4
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -33,7 +31,11 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleOwner
+import dtv.mobile.platform.Env1
+import dtv.mobile.platform.Env2
+import dtv.mobile.platform.Env3
+import dtv.mobile.platform.Env4
 import dtv.mobile.state.LocalVideoQuality
 import dtv.mobile.state.VideoQuality
 import dtv.mobile.util.AppLog
@@ -206,7 +208,7 @@ actual fun StreamPlayer(
   modifier: Modifier,
 ) {
   val context = LocalContext.current
-  val lifecycleOwner = LocalLifecycleOwner.current
+  val lifecycleOwner = context.findActivity() as? LifecycleOwner
   val quality = LocalVideoQuality.current
   // 兜底：构建播放器的任何一步失败都不允许把 App 带崩，
   // 失败时降级为"零可选配置"的最简播放器继续起播。
@@ -252,21 +254,25 @@ actual fun StreamPlayer(
   // 「熄屏听播」才允许后台继续音频。这里直接挂 LifecycleObserver，不能等
   // Compose 重组——Activity 已经 STOPPED 时，重组可能延后到下次回前台。
   DisposableEffect(player, lifecycleOwner, backgroundAudio) {
-    val observer = LifecycleEventObserver { _, event ->
-      when (event) {
-        Lifecycle.Event.ON_START -> player.play()
-        Lifecycle.Event.ON_STOP -> if (!backgroundAudio) player.pause()
-        else -> Unit
-      }
-    }
-    lifecycleOwner.lifecycle.addObserver(observer)
-    if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) || backgroundAudio) {
-      player.play()
+    if (lifecycleOwner == null) {
+      onDispose {}
     } else {
-      player.pause()
-    }
-    onDispose {
-      lifecycleOwner.lifecycle.removeObserver(observer)
+      val observer = LifecycleEventObserver { _, event ->
+        when (event) {
+          Lifecycle.Event.ON_START -> player.play()
+          Lifecycle.Event.ON_STOP -> if (!backgroundAudio) player.pause()
+          else -> Unit
+        }
+      }
+      lifecycleOwner.lifecycle.addObserver(observer)
+      if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) || backgroundAudio) {
+        player.play()
+      } else {
+        player.pause()
+      }
+      onDispose {
+        lifecycleOwner.lifecycle.removeObserver(observer)
+      }
     }
   }
 
@@ -421,4 +427,10 @@ actual fun StreamPlayer(
       },
     )
   }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.findActivity()
+  else -> null
 }
