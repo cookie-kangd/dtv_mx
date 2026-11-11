@@ -13,6 +13,7 @@ import dtv.mobile.platform.bilibili.BilibiliSearchApiAndroid
 import dtv.mobile.platform.bilibili.BilibiliStreamUrlResolverAndroid
 import dtv.mobile.platform.douyin.DouyinWebApiAndroid
 import dtv.mobile.platform.douyin.DouyinDanmakuClientAndroid
+import dtv.mobile.platform.douyin.DouyinCookieProvider
 import dtv.mobile.platform.douyu.DouyuCate2DirectoryApi
 import dtv.mobile.platform.douyu.DouyuCate3DirectoryApi
 import dtv.mobile.platform.douyu.DouyuCategoriesApi
@@ -85,6 +86,8 @@ class AndroidDtvRepository(
   private val douyuThreeCateApi = DouyuThreeCateApi(client)
   private val douyuCate2DirectoryApi = DouyuCate2DirectoryApi(client)
   private val douyuCate3DirectoryApi = DouyuCate3DirectoryApi(client)
+  // 斗鱼 did / ver / UA / cookie 已外置为 DouyuSourceConfig，后续可接入远程配置：
+  // DouyuStreamUrlResolverAndroid(appContext, client, DouyuSourceConfig(webVer = ..., cookieProvider = ...))
   private val douyuStreamResolver = DouyuStreamUrlResolverAndroid(appContext, client)
   private val douyuDanmakuClient = DouyuDanmakuClientAndroid()
   private val douyuSearchApi = DouyuSearchApiAndroid(client)
@@ -94,7 +97,9 @@ class AndroidDtvRepository(
   private val huyaDanmakuClient = HuyaDanmakuClientAndroid()
   private val huyaSearchApi = HuyaSearchApiAndroid(client)
 
-  private val douyinWebApi = DouyinWebApiAndroid(client)
+  // 抖音凭据改为运行时获取；旧的硬编码 ttwid 内嵌时间戳停留在 2025-10-21，已移除。
+  private val douyinCookieProvider = DouyinCookieProvider(appContext)
+  private val douyinWebApi = DouyinWebApiAndroid(client, douyinCookieProvider)
   private val douyinDanmakuClient = DouyinDanmakuClientAndroid(appContext, douyinWebApi)
 
   private val bilibiliCookieStore = BilibiliCookieStoreAndroid(appContext)

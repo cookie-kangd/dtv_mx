@@ -168,7 +168,8 @@ class DouyinDanmakuClientAndroid(
             .addHeader("cache-control", "no-cache")
             .addHeader("pragma", "no-cache")
             .addHeader("User-Agent", USER_AGENT)
-            .addHeader("Cookie", init.cookieHeader)
+            // Cookie 可能为空（动态获取失败时不再回退硬编码），空头不要发给服务端
+            .apply { if (init.cookieHeader.isNotBlank()) addHeader("Cookie", init.cookieHeader) }
             .addHeader("Origin", REFERER_BASE)
             .addHeader("Referer", "$REFERER_BASE/$rid")
             .build()
@@ -286,21 +287,24 @@ class DouyinDanmakuClientAndroid(
   }
 
   private suspend fun resolveRoomInit(webRid: String, primedRoomId: String?): RoomInit {
+    val requestCookie = webApi.currentCookie()
     val request = Request.Builder()
       .url("$REFERER_BASE/$webRid")
       .header("User-Agent", USER_AGENT)
       .header("Referer", REFERER_BASE)
-      .header("Cookie", DouyinWebApiAndroid.DEFAULT_COOKIE)
+      .apply { if (!requestCookie.isNullOrBlank()) header("Cookie", requestCookie) }
       .build()
 
     http.newCall(request).execute().use { resp ->
       // Align with kotlin-danmaku-android: only take the first Set-Cookie pair.
+      // 服务端下发的凭据优先，其次复用本次请求已取得的动态 Cookie；
+      // 两者都没有时为空，不再回退到过期的硬编码 ttwid。
       val cookieHeader = resp.headers("Set-Cookie")
         .firstOrNull()
         ?.substringBefore(";")
         ?.trim()
         .orEmpty()
-        .ifBlank { DouyinWebApiAndroid.DEFAULT_COOKIE }
+        .ifBlank { requestCookie.orEmpty() }
 
       val html = resp.body?.string().orEmpty()
       val rawUserUniqueId = extractUserUniqueId(html)

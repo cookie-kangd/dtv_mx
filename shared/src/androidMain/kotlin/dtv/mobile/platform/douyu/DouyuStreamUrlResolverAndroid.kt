@@ -4,6 +4,7 @@ import dtv.mobile.platform.Env1
 import android.content.Context
 import dtv.mobile.repo.DouyuPlayInfo
 import dtv.mobile.repo.DouyuPlayVariant
+import dtv.mobile.util.AppLog
 import dtv.mobile.util.decodeHtmlEntities
 import dtv.mobile.util.jsonElementToInt
 import dtv.mobile.util.jsonElementToString
@@ -25,6 +26,7 @@ import kotlin.math.roundToLong
 class DouyuStreamUrlResolverAndroid(
   private val appContext: Context,
   private val client: HttpClient,
+  private val config: DouyuSourceConfig = DouyuSourceConfig(),
 ) {
   private val signer = DouyuJsSignerAndroid(appContext)
   private val json = Json {
@@ -86,7 +88,7 @@ class DouyuStreamUrlResolverAndroid(
     return signer.signParams(
       homeH5EncScript = script,
       roomId = roomId,
-      did = DEFAULT_DOUYU_DID,
+      did = config.did,
       tsSeconds = ts,
     )
   }
@@ -125,7 +127,7 @@ class DouyuStreamUrlResolverAndroid(
     }
     return InternalPlayInfo(
       variants = variants,
-      cdns = if (cdns.isNotEmpty()) cdns else listOf(DEFAULT_DOUYU_CDN),
+      cdns = if (cdns.isNotEmpty()) cdns else listOf(config.defaultCdn),
     )
   }
 
@@ -144,16 +146,27 @@ class DouyuStreamUrlResolverAndroid(
     val data = resp.data ?: error("No data field in response")
     val rtmpUrl = data.rtmpUrl ?: error("No rtmp_url field")
     val rtmpLive = data.rtmpLive?.let(::decodeHtmlEntities) ?: error("No rtmp_live field")
-    return "$rtmpUrl/$rtmpLive"
+    val playUrl = "$rtmpUrl/$rtmpLive"
+    // fcdn=ws + expire=300 的临时直链会在 5 分钟后被切断，追加 expire=0 兜底。
+    // 见 DouyuPlayUrlPolicy（参考 simple_live_core/douyu_site.dart 的同名处理）。
+    val stabilized = DouyuPlayUrlPolicy.stabilize(playUrl)
+    if (stabilized != playUrl) {
+      AppLog.i(TAG, "douyu short-lease ws cdn stabilized with expire=0")
+    }
+    return stabilized
   }
 
   private fun buildQualityPayload(signData: String): String =
-    "$signData&cdn=&rate=-1&ver=$DOUYU_WEB_VER&iar=1&ive=1&hevc=0&fa=0"
+    "$signData&cdn=&rate=-1&ver=${config.webVer}&iar=1&ive=1&hevc=0&fa=0"
 
   private fun HttpRequestBuilder.douyuHeaders(roomId: String) {
     headers {
       set(HttpHeaders.Referrer, Env1.HOST + "/$roomId")
-      set(HttpHeaders.UserAgent, DOUYU_USER_AGENT)
+      set(HttpHeaders.UserAgent, config.userAgent)
+      // cookie 由外部注入（可过期刷新）；未注入时保持旧行为，不带 Cookie。
+      config.cookieProvider()?.trim()?.takeIf { it.isNotEmpty() }?.let {
+        set(HttpHeaders.Cookie, it)
+      }
     }
   }
 
@@ -162,7 +175,7 @@ class DouyuStreamUrlResolverAndroid(
     if (target.isNotEmpty()) {
       available.firstOrNull { it.lowercase() == target }?.let { return it }
     }
-    return available.firstOrNull() ?: DEFAULT_DOUYU_CDN
+    return available.firstOrNull() ?: config.defaultCdn
   }
 
   private fun resolveRate(quality: String?, variants: List<DouyuRateVariant>): Int? {
@@ -231,10 +244,6 @@ class DouyuStreamUrlResolverAndroid(
   )
 
   private companion object {
-    const val DEFAULT_DOUYU_CDN = "ws-h5"
-    const val DEFAULT_DOUYU_DID = "10000000000000000000000000001501"
-    const val DOUYU_WEB_VER = "Douyu_223061205"
-    const val DOUYU_USER_AGENT =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43"
+    const val TAG = "DTV-Douyu"
   }
 }

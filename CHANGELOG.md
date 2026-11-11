@@ -1,5 +1,25 @@
 # dtv_mx 更新日志
 
+## v0.2.25
+
+> 本版聚焦「直播源」维护，不改界面与交互。改动依据：对照 `SlotSun/dart_simple_live`（simple_live_core）当前实现与其 2026-09 的斗鱼断流修复，以及 `chen-zeong/DTV` 桌面端的续流修复。平台接口是否实际变化仍需真机回归确认。
+
+### 直播源：斗鱼断流兜底与参数外置
+- **修复 5 分钟断流**：斗鱼对 `fcdn=ws` 下发的 `expire=300` 临时直链会在起播约 5 分钟后被服务端切断。现在对该组合追加 `expire=0`（与 `simple_live_core/douyu_site.dart` 一致），并新增 `DouyuPlayUrlPolicy` 提供 `leaseExpiresAt` / `shouldRefresh`，供播放层后续做「到期前主动重取」。
+- **风控参数不再写死**：`did` / `ver` / `UA` / 默认 CDN 收口到 `DouyuSourceConfig`，构造时可注入；新增可选 `cookieProvider`，为后续接入 cookie 过期刷新留出接口。默认值与旧行为一致，无升级回归。
+- **新增纯逻辑回归测试**：`DouyuPlayUrlPolicyTest` 覆盖短租约识别、`expire=3000` 不误判、非 ws CDN 不改写、重复追加保护与续期窗口。
+
+### 直播源：抖音凭据动态化
+- **移除过期硬编码 ttwid**：`DouyinWebApiAndroid.DEFAULT_COOKIE` 内嵌时间戳停留在 2025-10-21，已删除；分区列表、进房接口与弹幕客户端都不再携带该凭据。
+- **接入动态 Cookie**：把仓库里原本写好但**没有任何调用点**的 `DouyinWebViewCookieAndroid` 接入请求链，新增 `DouyinCookieProvider` 做 WebView 取凭据 + 20 分钟缓存 + Mutex 单次飞行（最多等待 8 秒）。
+- **服务端凭据优先 + 安全降级**：接口响应 `Set-Cookie` 会回写缓存；取不到凭据时请求不带 Cookie（由服务端下发新凭据），不再回退到过期值；弹幕 WebSocket 在 Cookie 为空时不发送空头。
+
+### 工具
+- 新增 `scripts/source_smoke_check.py`：只读探测四个平台的公开入口，输出连通性报告，可作为每日巡检的起点（默认不启用定时任务，避免未经确认的高频请求）。
+
+### 尚未纳入本版
+- 虎牙 `sdkVersion` 外置 / VIP 房间 4K、B站列表与搜索的 WBI 与 buvid、斗鱼 cookie 自动刷新与播放层主动续期，仍待后续版本处理。
+
 ## v0.2.24
 
 ### 播放页底栏

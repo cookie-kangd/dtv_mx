@@ -21,11 +21,11 @@ import kotlinx.serialization.json.intOrNull
 
 class DouyinWebApiAndroid(
   private val client: HttpClient,
+  private val cookieSource: DouyinCookieSource? = null,
 ) {
   companion object {
-    // Use the tested cookie from the desktop project to improve API success.
-    internal const val DEFAULT_COOKIE =
-      "ttwid=1%7C2iDIYVmjzMcpZ20fcaFde0VghXAA3NaNXE_SLR68IyE%7C1761045455%7Cab35197d5cfb21df6cbb2fa7ef1c9262206b062c315b9d04da746d0b37dfbc7d"
+    // Cookie 不再硬编码：ttwid / __ac_nonce / msToken 由 DouyinCookieSource
+    // 运行时获取。旧的 DEFAULT_COOKIE 内嵌时间戳为 2025-10-21，已移除。
 
     // Align UA with the working sample.
     const val DEFAULT_USER_AGENT =
@@ -33,6 +33,10 @@ class DouyinWebApiAndroid(
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
   }
+
+  /** 当前有效 Cookie；无可用凭据时返回 null，调用方应省略 Cookie 头。 */
+  suspend fun currentCookie(): String? =
+    runCatching { cookieSource?.get() }.getOrNull()?.takeIf { it.isNotBlank() }
 
   data class PartitionResult(
     val rooms: List<DouyinRoom>,
@@ -127,11 +131,12 @@ class DouyinWebApiAndroid(
     val query = buildQuery(params)
     val sign = withContext(Dispatchers.Default) { generateABogus(query, DEFAULT_USER_AGENT) }
     val url = "${Env3.PARTITION_DETAIL}$query&a_bogus=${sign.encodeURLQueryComponent()}"
+    val cookie = currentCookie()
 
     val text = client.get(url) {
       headers {
         append("User-Agent", DEFAULT_USER_AGENT)
-        append("Cookie", DEFAULT_COOKIE)
+        if (!cookie.isNullOrBlank()) append("Cookie", cookie)
       }
     }.bodyAsText()
 
@@ -189,17 +194,26 @@ class DouyinWebApiAndroid(
     val query = buildQuery(params)
     val sign = withContext(Dispatchers.Default) { generateABogus(query, DEFAULT_USER_AGENT) }
     val url = "${Env3.ROOM_ENTER}$query&a_bogus=${sign.encodeURLQueryComponent()}"
+    val cookie = currentCookie()
 
     val response = client.get(url) {
       headers {
         append("User-Agent", DEFAULT_USER_AGENT)
         append("Referer", Env3.HOST + "/$webRid")
         append("Accept-Encoding", "identity")
-        append("Cookie", DEFAULT_COOKIE)
+        if (!cookie.isNullOrBlank()) append("Cookie", cookie)
       }
     }
     val text = response.bodyAsText()
     val msToken = response.headers["x-ms-token"]?.trim()?.takeIf { it.isNotBlank() }
+
+    // 服务端下发的新凭据优先级最高：即使 WebView 取 Cookie 失败，一次接口
+    // 响应也能把 ttwid / msToken 补回来，避免下次请求继续裸奔。
+    val responseCookie = response.headers.getAll("Set-Cookie").orEmpty()
+      .map { it.substringBefore(';').trim() }
+      .filter { it.isNotBlank() }
+      .joinToString("; ")
+    if (responseCookie.isNotBlank()) cookieSource?.remember(responseCookie)
 
     val root = json.parseToJsonElement(text).jsonObject
     val room = root.arr(listOf("data", "data"))?.firstOrNull()?.jsonObject
