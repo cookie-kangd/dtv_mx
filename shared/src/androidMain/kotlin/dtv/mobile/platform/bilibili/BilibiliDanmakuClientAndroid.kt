@@ -29,8 +29,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.Inflater
-import java.security.MessageDigest
-import kotlin.math.min
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.isActive
 import java.util.concurrent.TimeUnit
@@ -53,25 +51,11 @@ class BilibiliDanmakuClientAndroid(
 ) {
   companion object {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-
-    // https://github.com/SocialSisterYi/bilibili-API-collect (WBI signature)
-    // kept aligned with DTV-heroui src-tauri/src/platforms/bilibili/auth.rs
-    private val MIXIN_KEY_ENC_TAB = intArrayOf(
-      46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
-      27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
-      37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
-      22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
-    )
-
-    private data class NavInfo(
-      val imgKey: String,
-      val subKey: String,
-      val mid: Long?,
-    )
-
-    @Volatile private var cachedNavInfo: NavInfo? = null
-    @Volatile private var cachedWbiAtMs: Long = 0L
   }
+
+  // WBI 签名收口到独立类：弹幕与直播搜索共用同一套实现（各自的 signer 实例
+  // 各持一份 6 小时 nav 缓存，不是共享缓存）。
+  private val wbi = BilibiliWbiSigner(httpClient, cookieProvider)
 
   private data class DanmuInfo(
     val roomId: Int,
@@ -85,94 +69,8 @@ class BilibiliDanmakuClientAndroid(
     val wssPort: Int,
   )
 
-  private fun takeFilename(url: String): String? {
-    val slash = url.lastIndexOf('/')
-    if (slash < 0) return null
-    val tail = url.substring(slash + 1)
-    val dot = tail.lastIndexOf('.')
-    if (dot <= 0) return null
-    return tail.substring(0, dot)
-  }
-
-  private fun md5Hex(s: String): String {
-    val bytes = MessageDigest.getInstance("MD5").digest(s.encodeToByteArray())
-    val sb = StringBuilder(bytes.size * 2)
-    for (b in bytes) sb.append(String.format("%02x", b))
-    return sb.toString()
-  }
-
-  private fun urlEncodedWbiComponent(input: String): String {
-    val out = StringBuilder(input.length + 16)
-    for (ch in input) {
-      when {
-        ch.isLetterOrDigit() || ch == '-' || ch == '_' || ch == '.' || ch == '~' -> out.append(ch)
-        ch == '!' || ch == '\'' || ch == '(' || ch == ')' || ch == '*' -> Unit // skip
-        else -> {
-          val bytes = ch.toString().encodeToByteArray()
-          for (b in bytes) out.append(String.format("%%%02X", b.toInt() and 0xFF))
-        }
-      }
-    }
-    return out.toString()
-  }
-
-  private fun getMixinKey(orig: String): String {
-    val bytes = orig.encodeToByteArray()
-    val take = min(32, MIXIN_KEY_ENC_TAB.size)
-    val sb = StringBuilder(32)
-    for (i in 0 until take) {
-      val idx = MIXIN_KEY_ENC_TAB[i]
-      val b = bytes.getOrNull(idx) ?: 0
-      sb.append((b.toInt() and 0xFF).toChar())
-    }
-    return sb.toString()
-  }
-
-  private suspend fun getNavInfo(): NavInfo {
-    val now = System.currentTimeMillis()
-    val cached = cachedNavInfo
-    if (cached != null && now - cachedWbiAtMs < 6 * 60 * 60 * 1000L) return cached
-
-    val url = Env4.NAV
-    val cookie = cookieProvider()
-    val text = httpClient.get(url) {
-      headers {
-        append("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:138.0) Gecko/20100101 Firefox/138.0")
-        append("Referer", Env4.HOST + "/")
-        if (!cookie.isNullOrBlank()) append("Cookie", cookie)
-      }
-    }.bodyAsText()
-
-    val root = json.parseToJsonElement(text).jsonObject
-    val data = root["data"]?.jsonObject ?: error("B站 nav data 为空")
-    val mid = data["mid"]?.jsonPrimitive?.content?.toLongOrNull()
-    val wbi = data["wbi_img"]?.jsonObject ?: error("B站 nav wbi_img 为空")
-    val imgUrl = wbi["img_url"]?.jsonPrimitive?.content?.trim().orEmpty()
-    val subUrl = wbi["sub_url"]?.jsonPrimitive?.content?.trim().orEmpty()
-    val imgKey = takeFilename(imgUrl) ?: error("B站 img_key 解析失败")
-    val subKey = takeFilename(subUrl) ?: error("B站 sub_key 解析失败")
-    val nav = NavInfo(imgKey = imgKey, subKey = subKey, mid = mid)
-
-    cachedNavInfo = nav
-    cachedWbiAtMs = now
-    return nav
-  }
-
-  private suspend fun signedWbiQuery(params: List<Pair<String, String>>): String {
-    val (imgKey, subKey, _) = getNavInfo()
-    val mixinKey = getMixinKey(imgKey + subKey)
-    val wts = (System.currentTimeMillis() / 1000L).toString()
-
-    val all = (params + ("wts" to wts)).sortedBy { it.first }
-    val query = all.joinToString("&") { (k, v) ->
-      "${urlEncodedWbiComponent(k)}=${urlEncodedWbiComponent(v)}"
-    }
-    val wRid = md5Hex(query + mixinKey)
-    return "$query&w_rid=$wRid"
-  }
-
   private suspend fun fetchDanmuInfo(roomId: String): DanmuInfo {
-    val query = signedWbiQuery(
+    val query = wbi.signQuery(
       listOf(
         "id" to roomId,
         "type" to "0",
@@ -216,7 +114,7 @@ class BilibiliDanmakuClientAndroid(
     if (token.isBlank()) error("B站弹幕 token 为空")
 
     val resolvedEndpoints = endpoints.ifEmpty { listOf(Endpoint(host = "broadcastlv.chat.bilibili.com", wssPort = 443)) }
-    val uid = runCatching { getNavInfo().mid }.getOrNull() ?: 0L
+    val uid = runCatching { wbi.navMid() }.getOrNull() ?: 0L
     return DanmuInfo(roomId = realRoomId, uid = uid, token = token, endpoints = resolvedEndpoints)
   }
 

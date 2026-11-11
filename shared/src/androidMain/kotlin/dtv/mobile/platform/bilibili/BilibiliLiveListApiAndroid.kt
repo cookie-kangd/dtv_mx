@@ -23,6 +23,7 @@ import java.security.MessageDigest
 
 class BilibiliLiveListApiAndroid(
   private val client: HttpClient,
+  private val buvidProvider: BilibiliBuvidProvider,
 ) {
   private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -60,6 +61,9 @@ class BilibiliLiveListApiAndroid(
       return cached
     }
 
+    // cookie 必须在 client.get 之前取：headers { } 的 lambda 不是 suspend，
+    // 在里面调 suspend 的 ensureCookieHeader() 无法通过编译。
+    val cookie = buvidProvider.ensureCookieHeader()
     val html = client.get(Env4.LIST_PAGE_LOL) {
       headers {
         append(
@@ -67,6 +71,7 @@ class BilibiliLiveListApiAndroid(
           "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         )
         append("Referer", Env4.HOST + "/")
+        if (cookie.isNotBlank()) append("Cookie", cookie)
       }
     }.bodyAsText()
 
@@ -98,6 +103,9 @@ class BilibiliLiveListApiAndroid(
     val signString = pairs.joinToString("&") { (k, v) -> "$k=$v" } + secret
     val wRid = md5Hex(signString)
 
+    // 原来这里是写死的 "buvid3=i;"：既不是合法 buvid3，又把真实 cookie 覆盖掉，
+    // 等于每次请求都主动触发风控。改为用设备真实指纹（缺失时自动补齐）。
+    val cookie = buvidProvider.ensureCookieHeader()
     val text = client.get(Env4.AREA_LIST_SECOND) {
       headers {
         append(
@@ -105,7 +113,7 @@ class BilibiliLiveListApiAndroid(
           "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         )
         append("Referer", Env4.HOST + "/")
-        append("Cookie", "buvid3=i;")
+        if (cookie.isNotBlank()) append("Cookie", cookie)
       }
       pairs.forEach { (k, v) -> parameter(k, v) }
       parameter("w_rid", wRid)
@@ -122,10 +130,13 @@ class BilibiliLiveListApiAndroid(
   private suspend fun fetchHotIndexList(page: Int, pageSize: Int): List<JsonObject> {
     val url =
       "${Env4.INDEX_LIST}$page&page_size=$pageSize"
+    val cookie = buvidProvider.ensureCookieHeader()
     val text = client.get(url) {
       headers {
-        append("User-Agent", "Mozilla/5.0")
+        // 原来是裸 "Mozilla/5.0"，缺 buvid，热门页同样会被风控成空列表。
+        append("User-Agent", BilibiliBuvidProvider.USER_AGENT)
         append("Referer", Env4.LIVE_HOST + "/")
+        if (cookie.isNotBlank()) append("Cookie", cookie)
       }
     }.bodyAsText()
 

@@ -20,18 +20,13 @@ import kotlin.random.Random
 
 class HuyaStreamUrlResolverAndroid(
   private val client: HttpClient,
+  private val config: HuyaSourceConfig = HuyaSourceConfig(),
 ) {
   companion object {
     // 直播间页面里 stream 块的截取正则：原先在 hasCandidates / parseCandidates
     // 里各写了一份，每次调用（含每次重试）都要重新编译一次，而且这是 DOTALL 的
     // .*? 要扫整页 HTML。提到 companion 复用一份。
     private val STREAM_BLOCK_REGEX = Regex("(?s)stream:\\s*(\\{\"data\".*?),\"iWebDefaultBitRate\"")
-    private const val IOS_MOBILE_UA =
-      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
-    private const val DESKTOP_UA =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-
-    private const val HUYA_WEBH5_COOKIE = "huya_ua=webh5&0.1.0&websocket"
   }
 
   private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -90,16 +85,16 @@ class HuyaStreamUrlResolverAndroid(
       return client.get(url) {
         headers {
           if (useMobileHeaders) {
-            append("User-Agent", IOS_MOBILE_UA)
+            append("User-Agent", config.iosUserAgent)
             append("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
             append("Referer", Env2.MOBILE_HOST + "/")
           } else {
-            append("User-Agent", DESKTOP_UA)
+            append("User-Agent", config.desktopUserAgent)
             append("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
             append("Referer", Env2.HOST + "/")
           }
           append("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.6,en;q=0.4")
-          append("Cookie", HUYA_WEBH5_COOKIE)
+          append("Cookie", config.webH5Cookie)
         }
       }.bodyAsText()
     }
@@ -133,8 +128,8 @@ class HuyaStreamUrlResolverAndroid(
     val wsPrefix = fmPlain.split('_').firstOrNull().orEmpty()
     if (wsPrefix.isBlank()) error("failed to derive wsSecret prefix")
 
-    val paramsT = 100L
-    val sdkVersion = 2403051612L
+    val paramsT = config.paramsT
+    val sdkVersion = config.sdkVersion
     val t13 = currentMillis()
     val sdkSid = t13
 
@@ -179,16 +174,16 @@ class HuyaStreamUrlResolverAndroid(
       return client.get(url) {
         headers {
           if (useMobileHeaders) {
-            append("User-Agent", IOS_MOBILE_UA)
+            append("User-Agent", config.iosUserAgent)
             append("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
             append("Referer", Env2.MOBILE_HOST + "/")
           } else {
-            append("User-Agent", DESKTOP_UA)
+            append("User-Agent", config.desktopUserAgent)
             append("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
             append("Referer", Env2.HOST + "/")
           }
           append("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.6,en;q=0.4")
-          append("Cookie", HUYA_WEBH5_COOKIE)
+          append("Cookie", config.webH5Cookie)
         }
       }.bodyAsText()
     }
@@ -234,17 +229,8 @@ class HuyaStreamUrlResolverAndroid(
       "stream candidates roomId=$roomId: " + candidates.joinToString { (cdn, u) -> "$cdn=${u.take(64)}" },
     )
 
-    val selected = candidates
-      .sortedBy { (cdn, _) ->
-        when (cdn.lowercase()) {
-          // Android 上部分 CDN 可能 302 到带 '_' 的域名，导致 TLS/SNI 崩溃，优先避开 tx
-          "al" -> 0
-          "hs" -> 1
-          "tx" -> 2
-          else -> 3
-        }
-      }
-      .firstOrNull()
+    // 择优规则抽到 HuyaStreamPolicy（纯逻辑 + 单测），并支持按配置屏蔽失效 CDN。
+    val selected = HuyaStreamPolicy.select(candidates, config.excludedCdns)
       ?: error("虎牙未找到可用播放地址")
 
     val adjusted = adjustTxStreamUrl(selected.second, selected.first)

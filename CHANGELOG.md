@@ -1,5 +1,31 @@
 # dtv_mx 更新日志
 
+## v0.2.26
+
+> 承接 v0.2.25 的「直播源」维护，本版处理上一版留下的 P1/P2 项。所有改动都来自代码审查与参考实现（`SlotSun/dart_simple_live`、B 站 WBI 文档）对齐，**未做真机回归**；不涉及界面与交互。
+
+### B 站：搜索补 WBI 签名，列表/热门页换真实 buvid
+- **搜索被风控后静默返回空列表**：`x/web-interface/search/type` 对未签名请求返回 `code=-412`，原实现只判断 `code != 0` 就返回空列表，界面上与「真的没有搜索结果」无法区分。现在按 WBI 规则签名（`wts` + `w_rid`，img_key/sub_key 每日轮换、缓存 6 小时），并对 `-412` 单独打日志（`DTV-Bili`）。
+- **签名实现去重**：WBI 原本只以 private 方法存在于弹幕客户端；现抽成 `BilibiliWbiSigner`，弹幕与搜索共用同一套实现（各自持有 6 小时 nav 缓存、Mutex 单飞），避免两套实现各自漂移。
+- **删除 `Cookie: buvid3=i;` 占位值**：分区列表与热门列表原先硬编码这个 cookie。`i` 既不是合法 buvid，又把真实 cookie 覆盖掉，等于每次请求主动触发风控。现由 `BilibiliBuvidProvider` 统一提供：优先复用已持久化的 cookie，缺失时拉 `finger/spi` 补齐并写回。
+- **热门页修正**：`/index/getList` 原本是裸 `Mozilla/5.0` 且不带 cookie，现改为桌面 UA + buvid。
+
+### 虎牙：anti-code 参数外置 + CDN 择优可配置
+- `sdkVersion = 2403051612`（2024-03）、`t = 100`、桌面/移动 UA、`huya_ua` cookie 收口到 `HuyaSourceConfig`，可外部注入；默认值与旧行为逐字一致（无升级回归）。
+- **注入点说明**：目前没有远程配置/设置项下发通道，实际生效值仍是默认值——这是给后续「参数热更新」留的接缝，不是已生效的远程开关。
+- CDN 择优抽成 `HuyaStreamPolicy`（纯逻辑 + 8 个单测），新增 `excludedCdns`：某个 CDN 实测失效时可配置跳过（如 `tx` 的 `_` 域名会触发 Android TLS/SNI 校验失败），不必发新版。
+- **关于「VIP 房间 4K」**：当前实现只取一路流、不做码率分档，参考项目的 VIP 判断在本实现里没有对应字段可用，因此**没有臆造白名单**；确需屏蔽时用 `excludedCdns`。
+
+### 斗鱼：匿名态 cookie 与断流自愈
+- **请求开始携带标准匿名 cookie**：旧实现完全不带 Cookie，而参考 `DouyuUtils.requestHeader` 对所有请求都带 `dy_did=<did>; acf_did=<did>`。现在未显式注入时按 `config.did` 生成，`config.copy(did = …)` 后 cookie 与签名参数仍一致。
+  > 注意：这是**请求头行为变更**（从「无 Cookie」到「恒带匿名 did」），参数默认值本身没变，需真机确认未触发额外校验。
+- **播放层断流自愈**：直播播放出错时先自动重取播放地址并重试，每个直播间 2 次额度（成功起播后复位），额度用尽才把错误抛给用户。原来一旦出错就停在「播放出错」页，只能退出重进。
+- **未采用「每 4.5 分钟定时重取」**：`expire=0` 已消除短租约这个根因，周期性重建播放器只会带来可感知的重新缓冲，收益与代价不成比例，故改为「出错驱动」。
+
+### 审查结论
+- 上述 `Cookie: buvid3=i;`、搜索静默 `-412`、斗鱼 `cookieProvider`「已定义但从未接线」属于既有缺陷，本版一并修复。
+- 已知边界：`BilibiliLiveListApiAndroid` 仍靠抓 `live.bilibili.com/lol` 页面提取 `access_id`，该页面改版会导致二级分区列表失败（有 runCatching 兜底为空列表）；未在无网络环境下验证。
+
 ## v0.2.25
 
 > 本版聚焦「直播源」维护，不改界面与交互。改动依据：对照 `SlotSun/dart_simple_live`（simple_live_core）当前实现与其 2026-09 的斗鱼断流修复，以及 `chen-zeong/DTV` 桌面端的续流修复。平台接口是否实际变化仍需真机回归确认。

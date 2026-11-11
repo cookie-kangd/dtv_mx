@@ -3,26 +3,30 @@ import dtv.mobile.platform.Env4
 
 import dtv.mobile.model.Platform
 import dtv.mobile.model.Streamer
+import dtv.mobile.util.AppLog
 import dtv.mobile.util.normalizeHttpUrl
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
-import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 class BilibiliSearchApiAndroid(
   private val client: HttpClient,
   private val cookieStore: BilibiliCookieStoreAndroid,
+  private val buvidProvider: BilibiliBuvidProvider,
 ) {
   private val json = Json { ignoreUnknownKeys = true; isLenient = true }
   private val emTagPattern = Regex("(?i)</?em[^>]*>")
+
+  // 直播搜索同样要求 WBI 签名，与弹幕共用同一套 signer 实现（各自一份 nav 缓存）。
+  private val wbi = BilibiliWbiSigner(client) { cookieStore.getCookie() }
 
   private fun JsonElement?.stringValueOrNull(): String? {
     val p = this as? kotlinx.serialization.json.JsonPrimitive ?: return null
@@ -46,86 +50,74 @@ class BilibiliSearchApiAndroid(
     return if (full.contains('@')) full else "$full@400w.jpg"
   }
 
-  private fun parseCookiePairs(cookie: String): MutableList<Pair<String, String>> {
-    if (cookie.isBlank()) return mutableListOf()
-    return cookie.split(';')
-      .mapNotNull { it.trim() }
-      .mapNotNull { seg ->
-        val idx = seg.indexOf('=')
-        if (idx <= 0) return@mapNotNull null
-        val k = seg.substring(0, idx).trim()
-        val v = seg.substring(idx + 1).trim()
-        if (k.isBlank()) return@mapNotNull null
-        k to v
-      }
-      .toMutableList()
-  }
-
-  private fun findCookie(pairs: List<Pair<String, String>>, key: String): String? {
-    return pairs.firstOrNull { (k, _) -> k.equals(key, ignoreCase = true) }?.second
-  }
-
-  private fun upsertCookie(pairs: MutableList<Pair<String, String>>, key: String, value: String) {
-    val idx = pairs.indexOfFirst { (k, _) -> k.equals(key, ignoreCase = true) }
-    if (idx >= 0) pairs[idx] = key to value else pairs.add(key to value)
-  }
-
-  private fun buildCookieHeader(pairs: List<Pair<String, String>>): String {
-    return pairs.joinToString("; ") { (k, v) -> "$k=$v" }
-  }
-
-  private suspend fun ensureBuvid(cookieHeader: String): String {
-    val pairs = parseCookiePairs(cookieHeader)
-    val has3 = findCookie(pairs, "buvid3") != null
-    val has4 = findCookie(pairs, "buvid4") != null
-    if (has3 && has4) return cookieHeader
-
-    val text = client.get(Env4.FINGER_SPI) {
+  private suspend fun getSearchText(url: String, cookieHeader: String): String =
+    client.get(url) {
       headers {
-        append("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+        append("User-Agent", BilibiliBuvidProvider.USER_AGENT)
         append("Referer", Env4.LIVE_HOST + "/")
         if (cookieHeader.isNotBlank()) append("Cookie", cookieHeader)
       }
     }.bodyAsText()
 
-    val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return cookieHeader
-    val data = root["data"]?.jsonObject
-    val b3 = data?.get("b_3").stringValueOrNull()
-    val b4 = data?.get("b_4").stringValueOrNull()
-    if (!b3.isNullOrBlank()) upsertCookie(pairs, "buvid3", b3)
-    if (!b4.isNullOrBlank()) upsertCookie(pairs, "buvid4", b4)
-    return buildCookieHeader(pairs)
-  }
-
+  /**
+   * 搜索直播房间。
+   *
+   * 签名说明：B 站 `x/web-interface/search/type` 对未签名请求返回 `-412`，
+   * 因此这里必须走 WBI。签名串一旦被 ktor 的 `parameter()` 二次拼接就会失配，
+   * 所以带签名时所有参数都拼在 URL 里，不再用 `parameter()`。
+   * nav 取不到（离线/风控）时退回不带签名的旧路径，至少保留「可能成功」的机会。
+   */
   suspend fun searchRooms(keyword: String, page: Int = 1): List<Streamer> {
     val trimmed = keyword.trim()
     if (trimmed.isEmpty()) return emptyList()
 
-    val initialCookie = cookieStore.getCookie().orEmpty()
-    val cookieHeader = runCatching { ensureBuvid(initialCookie) }.getOrElse { initialCookie }
-    if (cookieHeader.isNotBlank()) cookieStore.mergeFromCookieHeader(cookieHeader)
+    // 取不到指纹就退回已持久化的 cookie：搜索本身还能靠 WBI 签名尝试一次。
+    // CancellationException 必须重抛，不能当成「取指纹失败」吞掉。
+    val cookieHeader = try {
+      buvidProvider.ensureCookieHeader()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      cookieStore.getCookie().orEmpty()
+    }
 
-    val text = client.get(Env4.SEARCH_TYPE) {
-      parameter("context", "")
-      parameter("search_type", "live")
-      parameter("cover_type", "user_cover")
-      parameter("order", "")
-      parameter("keyword", trimmed)
-      parameter("category_id", "")
-      parameter("__refresh__", "")
-      parameter("_extra", "")
-      parameter("highlight", "0")
-      parameter("single_column", "0")
-      parameter("page", page.toString())
-      headers {
-        append("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
-        append("Referer", Env4.LIVE_HOST + "/")
-        if (cookieHeader.isNotBlank()) append("Cookie", cookieHeader)
-      }
-    }.bodyAsText()
+    val params = listOf(
+      "context" to "",
+      "search_type" to "live",
+      "cover_type" to "user_cover",
+      "order" to "",
+      "keyword" to trimmed,
+      "category_id" to "",
+      "__refresh__" to "",
+      "_extra" to "",
+      "highlight" to "0",
+      "single_column" to "0",
+      "page" to page.toString(),
+      "platform" to "web",
+      "web_location" to "1430654",
+    )
+    val signed = try {
+      wbi.signQuery(params)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      null
+    }
+    val text = if (signed != null) {
+      getSearchText("${Env4.SEARCH_TYPE}?$signed", cookieHeader)
+    } else {
+      val fallback = params.joinToString("&") { (k, v) -> "$k=${urlEncode(v)}" }
+      getSearchText("${Env4.SEARCH_TYPE}?$fallback", cookieHeader)
+    }
 
     val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return emptyList()
     val code = root["code"].longValueOrNull() ?: -1L
+    if (code == -412L) {
+      // 风控拦截：签名失效或 buvid 缺失。原来这里静默返回空列表，
+      // 界面上与「真的没有搜索结果」无法区分，排查时只能靠抓包。
+      AppLog.w("DTV-Bili", "search blocked (-412) keyword=$trimmed page=$page")
+      return emptyList()
+    }
     if (code != 0L) return emptyList()
 
     val liveUsers = root["data"]?.jsonObject
@@ -164,5 +156,19 @@ class BilibiliSearchApiAndroid(
       )
     }
   }
-}
 
+  /**
+   * 兜底路径的轻量 URL 编码：只保留 WBI 同款的非转义字符集合，
+   * 保证中文关键词与空格不会破坏查询串。
+   */
+  private fun urlEncode(input: String): String {
+    val out = StringBuilder(input.length + 8)
+    for (ch in input) {
+      when {
+        ch.isLetterOrDigit() || ch == '-' || ch == '_' || ch == '.' || ch == '~' -> out.append(ch)
+        else -> for (b in ch.toString().encodeToByteArray()) out.append(String.format("%%%02X", b.toInt() and 0xFF))
+      }
+    }
+    return out.toString()
+  }
+}

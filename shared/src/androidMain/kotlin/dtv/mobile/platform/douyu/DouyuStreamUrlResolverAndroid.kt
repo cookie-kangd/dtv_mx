@@ -163,10 +163,14 @@ class DouyuStreamUrlResolverAndroid(
     headers {
       set(HttpHeaders.Referrer, Env1.HOST + "/$roomId")
       set(HttpHeaders.UserAgent, config.userAgent)
-      // cookie 由外部注入（可过期刷新）；未注入时保持旧行为，不带 Cookie。
-      config.cookieProvider()?.trim()?.takeIf { it.isNotEmpty() }?.let {
-        set(HttpHeaders.Cookie, it)
-      }
+      // 显式注入的 cookie 优先（登录态 / 刷新后的凭据）；
+      // 未注入时用匿名态标准 cookie —— 参考 SlotSun/dart_simple_live 的
+      // `DouyuUtils.requestHeader`，它对所有请求都带 `dy_did=<did>; acf_did=<did>`，
+      // 而旧实现完全不带 Cookie，风控更容易把会话判定为无设备。
+      // did 从 config 读，保证 config.copy(did = ...) 后的 cookie 与签名参数一致。
+      val cookie = config.cookieProvider()?.trim()?.takeIf { it.isNotEmpty() }
+        ?: "dy_did=${config.did}; acf_did=${config.did}"
+      set(HttpHeaders.Cookie, cookie)
     }
   }
 

@@ -17,7 +17,13 @@ data class DouyuSourceConfig(
   val webVer: String = DEFAULT_WEB_VER,
   val userAgent: String = DEFAULT_USER_AGENT,
   val defaultCdn: String = DEFAULT_CDN,
-  /** 由外部提供已刷新的 cookie；返回 null 表示不带 Cookie（与旧行为一致）。 */
+  /**
+   * 显式指定的 cookie（登录态 / 刷新后的凭据）；返回 null 或不注入时，
+   * 解析器会按 [did] 生成匿名态标准 cookie `dy_did=<did>; acf_did=<did>`。
+   *
+   * 注意：这里刻意不把「按 did 生成 cookie」写成默认 lambda —— 那样
+   * `config.copy(did = ...)` 之后 lambda 仍捕获旧 did，cookie 与签名参数会不一致。
+   */
   val cookieProvider: () -> String? = { null },
 ) {
   companion object {

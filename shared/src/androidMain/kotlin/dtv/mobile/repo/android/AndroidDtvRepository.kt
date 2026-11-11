@@ -6,6 +6,7 @@ import dtv.mobile.model.Platform
 import dtv.mobile.model.Streamer
 import dtv.mobile.net.createHttpClient
 import dtv.mobile.platform.bilibili.BilibiliAuthApiAndroid
+import dtv.mobile.platform.bilibili.BilibiliBuvidProvider
 import dtv.mobile.platform.bilibili.BilibiliCookieStoreAndroid
 import dtv.mobile.platform.bilibili.BilibiliDanmakuClientAndroid
 import dtv.mobile.platform.bilibili.BilibiliLiveListApiAndroid
@@ -104,9 +105,11 @@ class AndroidDtvRepository(
 
   private val bilibiliCookieStore = BilibiliCookieStoreAndroid(appContext)
   private val bilibiliAuthApi = BilibiliAuthApiAndroid(client, bilibiliCookieStore)
-  private val bilibiliLiveListApi = BilibiliLiveListApiAndroid(client)
+  // buvid 由列表页与搜索共用一份实例：单飞取指纹，避免同屏多个分区并发拉 finger/spi。
+  private val bilibiliBuvidProvider = BilibiliBuvidProvider(client, bilibiliCookieStore)
+  private val bilibiliLiveListApi = BilibiliLiveListApiAndroid(client, bilibiliBuvidProvider)
   private val bilibiliStreamResolver = BilibiliStreamUrlResolverAndroid(client) { bilibiliCookieStore.getCookie() }
-  private val bilibiliSearchApi = BilibiliSearchApiAndroid(client, bilibiliCookieStore)
+  private val bilibiliSearchApi = BilibiliSearchApiAndroid(client, bilibiliCookieStore, bilibiliBuvidProvider)
   private val bilibiliDanmakuClient = BilibiliDanmakuClientAndroid(
     httpClient = client,
     cookieProvider = { bilibiliCookieStore.getCookie() },

@@ -169,6 +169,12 @@ fun PlayerScreen(
   var selectedTwitchQuality by remember(streamer?.roomId) { mutableStateOf<String?>(null) }
   var twitchInfo by remember(streamer?.roomId) { mutableStateOf<TwitchPlayInfo?>(null) }
   var showSettings by remember(streamer?.roomId) { mutableStateOf(false) }
+  // 断流自愈额度：直播直链（尤其斗鱼 expire=300 短租约 / CDN 主动断链）在播放中
+  // 失效时，直接弹「播放出错」对用户是死路 —— 重新解析一次地址通常就能继续看。
+  // 每个房间给 2 次机会，成功起播后复位；额度用尽才把错误抛给用户。
+  // 只对直播生效：点播地址失效重取也救不回来，没必要多转两圈。
+  var autoReloadLeft by remember(streamer?.roomId) { mutableIntStateOf(2) }
+
 
   // 弹幕总开关：与字体大小/透明度/显示区域一样走 AppState 持久化。
   // 原来只是 remember(roomId) 的本地 state，关掉后退出房间再进来自己弹回「开」，
@@ -240,6 +246,16 @@ fun PlayerScreen(
   SideEffect { currentRoomId.value = streamer?.roomId }
   // 画质/线路切换触发的地址解析任务：再次切换或切房时先取消上一个，避免旧结果覆盖新结果
   var resolveJob by remember { mutableStateOf<Job?>(null) }
+
+  // 断流自愈额度只在「稳定播出 8 秒」后复位：若在起播瞬间复位，遇到「播几秒就被掐」
+  // 的流会退化成无限抖动（2 次额度永远用不完）。放在 videoReady 之后声明，
+  // 否则 LaunchedEffect 的 key 引用不到该状态。
+  LaunchedEffect(videoReady, streamer?.roomId) {
+    if (videoReady) {
+      delay(8_000)
+      autoReloadLeft = 2
+    }
+  }
 
   // 画中画：仅在支持的设备上显示按钮；进入后隐藏所有叠加层，只保留视频画面。
   val pipSupported = remember { PictureInPicture.isSupported() }
@@ -937,6 +953,19 @@ fun PlayerScreen(
                   if (it.startsWith("__retry_http__:")) {
                     error = null
                     url = it.removePrefix("__retry_http__:")
+                  } else if (autoReloadLeft > 0 && streamer?.isLive == true) {
+                    // 断流自愈：先留在「加载中」而不是立刻弹错误，给 1.2s 让播放器
+                    // 自己恢复（弱网抖动很常见），再重取播放地址。
+                    autoReloadLeft -= 1
+                    error = null
+                    loading = true
+                    val roomAtError = streamer?.roomId
+                    scope.launch {
+                      delay(1_200)
+                      // 延迟窗口内可能已经切房：reloadUrl 是共享的 resolveJob 驱动的，
+                      // 这里若不校验房间，旧任务醒来会把「新房」正在跑的解析取消掉。
+                      if (currentRoomId.value == roomAtError) reloadUrl()
+                    }
                   } else {
                     error = it
                     url = null
