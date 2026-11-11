@@ -26,7 +26,9 @@ class BilibiliSearchApiAndroid(
   private val emTagPattern = Regex("(?i)</?em[^>]*>")
 
   // 直播搜索同样要求 WBI 签名，与弹幕共用同一套 signer 实现（各自一份 nav 缓存）。
-  private val wbi = BilibiliWbiSigner(client) { cookieStore.getCookie() }
+  // 必须用具名参数：signer 的最后一个参数是 userAgent: String，
+  // 写成 `BilibiliWbiSigner(client) { ... }` 时尾随 lambda 会去绑定它，直接编译失败。
+  private val wbi = BilibiliWbiSigner(client, cookieProvider = { cookieStore.getCookie() })
 
   private fun JsonElement?.stringValueOrNull(): String? {
     val p = this as? kotlinx.serialization.json.JsonPrimitive ?: return null
