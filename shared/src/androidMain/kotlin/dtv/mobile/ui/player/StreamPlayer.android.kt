@@ -57,6 +57,9 @@ private const val STALL_CHECK_INTERVAL_MS = 2_000L
  */
 private const val STALL_TIMEOUT_MS = 12_000L
 
+/** 一帧都没渲染过时的起播宽限（含软解回退）；比常规卡死判定更宽松。 */
+private const val FIRST_FRAME_TIMEOUT_MS = 30_000L
+
 /** 直播窗口落后时，原地 seek 回直播边缘的重试窗口：窗口内只允许一次，避免静默死循环。 */
 private const val BEHIND_LIVE_WINDOW_RETRY_WINDOW_MS = 30_000L
 
@@ -302,7 +305,10 @@ actual fun StreamPlayer(
   // v0.2.26 的断流自愈只在 onError 触发，对这种「静默卡死」完全无效。
   // 这里用 VideoFrameMetadataListener 直接监测「有没有新视频帧被渲染」：
   // 连续 12s 没有新帧就判定卡死，交给播放页重取地址并重建播放器。
-  // 主动暂停 / 切后台 / 熄屏听播 / 出错待恢复都不算卡死，会给缓冲重新留宽限期。
+  // 判定规则抽成 commonMain 的纯函数 decideWatchdogAction，由 commonTest 覆盖
+  // （见 PlaybackWatchdogTest），避免「只在真机上才验证得了」。
+  // 切后台 / 熄屏听播 / 出错待恢复不算卡死；但前台意外暂停（AUDIOFOCUS_LOSS
+  // 会把 playWhenReady 永久置 false）必须算，否则画面会一直定格。
   val onStalledRef = rememberUpdatedState(onStalled)
   val backgroundAudioRef = rememberUpdatedState(backgroundAudio)
   DisposableEffect(player) {
@@ -310,7 +316,7 @@ actual fun StreamPlayer(
     val lastFrameAtMs = AtomicLong(0L)
     val framesEverRendered = AtomicBoolean(false)
     val frameListener = VideoFrameMetadataListener { _, _, _, _ ->
-      // 回调在播放线程执行，只做一次原子写，正常播放约 30~60 次/秒，开销可忽略。
+      // 回调在播放线程执行，只做原子写，正常播放约 30~60 次/秒，开销可忽略。
       framesEverRendered.set(true)
       lastFrameAtMs.set(SystemClock.elapsedRealtime())
     }
@@ -323,29 +329,42 @@ actual fun StreamPlayer(
       override fun run() {
         if (fired) return
         val now = SystemClock.elapsedRealtime()
-        val skip = !player.playWhenReady || backgroundAudioRef.value || player.playerError != null
-        if (skip) {
-          // 这些状态下没有画面是预期行为：刷新心跳，避免恢复后把「暂停期间没画面」误判为卡死
-          lastFrameAtMs.set(now)
-          lastHealthyAtMs = now
-        } else {
-          val lastFrame = lastFrameAtMs.get()
-          when {
-            // 之前有画面、现在连续 12s 没有新帧：无论音频是否还在，都判定画面卡死
-            framesEverRendered.get() && now - lastFrame >= STALL_TIMEOUT_MS -> {
-              fired = true
-              AppLog.w("DTV-Player", "video stalled: url=$url noFrame=${now - lastFrame}ms state=${player.playbackState}, requesting reload")
-              onStalledRef.value()
-              return
-            }
-            // 逐帧回调在少数机型/隧道解码下可能不生效：此时退化为「一直没在播」判定
-            !framesEverRendered.get() && player.isPlaying -> lastHealthyAtMs = now
-            !framesEverRendered.get() && now - lastHealthyAtMs >= STALL_TIMEOUT_MS -> {
-              fired = true
-              AppLog.w("DTV-Player", "no video frame and not playing: url=$url state=${player.playbackState}, requesting reload")
-              onStalledRef.value()
-              return
-            }
+        val foreground = lifecycleOwner?.lifecycle?.currentState
+          ?.isAtLeast(Lifecycle.State.STARTED) ?: true
+        val lastFrame = lastFrameAtMs.get()
+        when (
+          decideWatchdogAction(
+            nowMs = now,
+            lastFrameAtMs = lastFrame,
+            framesEverRendered = framesEverRendered.get(),
+            playWhenReady = player.playWhenReady,
+            isPlaying = player.isPlaying,
+            hasPlayerError = player.playerError != null,
+            appForeground = foreground,
+            listenOnly = backgroundAudioRef.value,
+            lastHealthyAtMs = lastHealthyAtMs,
+            stallTimeoutMs = STALL_TIMEOUT_MS,
+            firstFrameTimeoutMs = FIRST_FRAME_TIMEOUT_MS,
+          )
+        ) {
+          WatchdogAction.ResetGrace -> {
+            // 这些状态下没有画面是预期行为：刷新心跳，避免恢复后把暂停期间空白误判为卡死
+            lastFrameAtMs.set(now)
+            lastHealthyAtMs = now
+          }
+          WatchdogAction.Healthy -> {
+            // 只有「确实在播」才刷新健康心跳；没在播时让它累计超时，兜住从未出帧的情况
+            if (player.isPlaying) lastHealthyAtMs = now
+          }
+          WatchdogAction.Recover -> {
+            fired = true
+            AppLog.w(
+              "DTV-Player",
+              "video stalled: url=$url noFrame=${now - lastFrame}ms " +
+                "state=${player.playbackState} playWhenReady=${player.playWhenReady}, requesting reload",
+            )
+            onStalledRef.value()
+            return
           }
         }
         handler.postDelayed(this, STALL_CHECK_INTERVAL_MS)

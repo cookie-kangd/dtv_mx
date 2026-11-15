@@ -874,9 +874,13 @@ fun PlayerScreen(
 
     PlatformBackHandler(enabled = showSettingsDrawer || showSettingsSheet) { showSettings = false }
 
+    // 全页 loading 只用于「首次进房还没解析出地址」。播放中断流重连时
+    // playbackStarted 已为 true，此时必须保留视频 Surface（连同右侧的手动重试按钮），
+    // 否则整个播放器区域被换成全屏转圈，用户在恢复期间连重试入口都点不到。
     val showFullPageLoading = !fullscreen &&
       !verticalFullBleed &&
       !isInPip &&
+      !playbackStarted &&
       streamer?.isLive == true &&
       url == null &&
       error == null &&
