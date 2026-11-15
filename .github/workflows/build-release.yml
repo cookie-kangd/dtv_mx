@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # 应用版本号（需与 androidApp/build.gradle.kts 的 versionName 保持一致）
-      APP_VERSION: "0.2.26"
+      APP_VERSION: "0.2.27"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -153,26 +153,22 @@ jobs:
           # 否则 gh 会因为"本地已有同名 tag 但未推送"而拒绝创建
           git push --delete origin "refs/tags/$TAG" || echo "remote tag $TAG absent, skip"
           git tag -d "$TAG" || echo "local tag $TAG absent, skip"
-          # 只截取与当前版本对应的 CHANGELOG 小节作为 Release 说明，
-          # 内容直接写「新增了什么功能、修复了什么问题」，不重复罗列历史版本的内容。
-          {
-            echo "## dtv_mx 更新说明"
-            echo ""
-            # sub(/\r$/, "") 兜住 CRLF 换行的 CHANGELOG，
-            # 否则 "## v0.1.9\r" 与 "## v0.1.9" 比较不相等，会抽出空说明。
-            awk -v ver="v${VERSION}" '
-              { sub(/\r$/, "") }
-              /^## / {
-                if ($0 == "## " ver) { p = 1; next }
-                else { p = 0 }
-              }
-              p { print }
-            ' CHANGELOG.md
-          } > release_body.md
+          # 更新说明只写「这次改了什么」：直接取 CHANGELOG 当前版本小节的正文，
+          # 不加标题、不带空行、不重复罗列历史版本内容。
+          # sub(/\r$/, "") 兜住 CRLF 换行的 CHANGELOG，
+          # 否则 "## v0.1.9\r" 与 "## v0.1.9" 比较不相等，会抽出空说明。
+          awk -v ver="v${VERSION}" '
+            { sub(/\r$/, "") }
+            /^## / {
+              if ($0 == "## " ver) { p = 1; next }
+              else { p = 0 }
+            }
+            p && NF { print }
+          ' CHANGELOG.md > release_body.md
           echo "----- release notes preview -----"
           cat release_body.md
           # 说明为空说明 CHANGELOG 里没有对应版本小节，直接失败以免发出空说明的 release
-          if [ "$(grep -cve '^[[:space:]]*$' release_body.md)" -le 1 ]; then
+          if [ ! -s release_body.md ]; then
             echo "::error::CHANGELOG.md 中未找到 '## v${VERSION}' 小节，Release 说明为空"
             exit 1
           fi

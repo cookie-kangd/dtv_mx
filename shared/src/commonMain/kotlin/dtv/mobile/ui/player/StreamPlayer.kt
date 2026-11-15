@@ -12,5 +12,7 @@ expect fun StreamPlayer(
   backgroundAudio: Boolean = false,
   onVideoAspectRatioChanged: (Float?) -> Unit = {},
   onError: (String) -> Unit = {},
+  // 播放进度长时间没有推进（画面卡死但播放器没报错）时回调，由播放页重取地址重建播放器
+  onStalled: () -> Unit = {},
   modifier: Modifier = Modifier,
 )

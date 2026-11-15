@@ -4,10 +4,14 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -27,6 +31,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.video.VideoFrameMetadataListener
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.lifecycle.Lifecycle
@@ -40,6 +45,20 @@ import dtv.mobile.state.LocalVideoQuality
 import dtv.mobile.state.VideoQuality
 import dtv.mobile.util.AppLog
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
+/** 卡帧看门狗的采样间隔。 */
+private const val STALL_CHECK_INTERVAL_MS = 2_000L
+
+/**
+ * 连续多久没有渲染出新的视频帧就判定为卡死。
+ * 弱网抖动 / 首帧缓冲一般 3~5s 内出画面，12s 既宽松又不让用户干等。
+ */
+private const val STALL_TIMEOUT_MS = 12_000L
+
+/** 直播窗口落后时，原地 seek 回直播边缘的重试窗口：窗口内只允许一次，避免静默死循环。 */
+private const val BEHIND_LIVE_WINDOW_RETRY_WINDOW_MS = 30_000L
 
 /**
  * 应用级媒体缓存（仅用于点播/回放，直播不使用磁盘缓存以免增加延迟与磁盘占用）。
@@ -205,6 +224,7 @@ actual fun StreamPlayer(
   backgroundAudio: Boolean,
   onVideoAspectRatioChanged: (Float?) -> Unit,
   onError: (String) -> Unit,
+  onStalled: () -> Unit,
   modifier: Modifier,
 ) {
   val context = LocalContext.current
@@ -276,16 +296,89 @@ actual fun StreamPlayer(
     }
   }
 
+  // 直播卡帧看门狗：CDN 静默断链、直播窗口落后、解码器卡住时，ExoPlayer 常常
+  // 既不回调 onPlayerError 也不退出 BUFFERING，最后一帧会一直挂在屏幕上；
+  // 弹幕是独立的 WebSocket，仍在正常刷新 —— 这就是「画面不动但有弹幕」。
+  // v0.2.26 的断流自愈只在 onError 触发，对这种「静默卡死」完全无效。
+  // 这里用 VideoFrameMetadataListener 直接监测「有没有新视频帧被渲染」：
+  // 连续 12s 没有新帧就判定卡死，交给播放页重取地址并重建播放器。
+  // 主动暂停 / 切后台 / 熄屏听播 / 出错待恢复都不算卡死，会给缓冲重新留宽限期。
+  val onStalledRef = rememberUpdatedState(onStalled)
+  val backgroundAudioRef = rememberUpdatedState(backgroundAudio)
+  DisposableEffect(player) {
+    val handler = Handler(Looper.getMainLooper())
+    val lastFrameAtMs = AtomicLong(0L)
+    val framesEverRendered = AtomicBoolean(false)
+    val frameListener = VideoFrameMetadataListener { _, _, _, _ ->
+      // 回调在播放线程执行，只做一次原子写，正常播放约 30~60 次/秒，开销可忽略。
+      framesEverRendered.set(true)
+      lastFrameAtMs.set(SystemClock.elapsedRealtime())
+    }
+    runCatching { player.setVideoFrameMetadataListener(frameListener) }
+      .onFailure { AppLog.w("DTV-Player", "frame metadata listener unavailable: ${it.message}") }
+
+    var lastHealthyAtMs = SystemClock.elapsedRealtime()
+    var fired = false
+    val tick = object : Runnable {
+      override fun run() {
+        if (fired) return
+        val now = SystemClock.elapsedRealtime()
+        val skip = !player.playWhenReady || backgroundAudioRef.value || player.playerError != null
+        if (skip) {
+          // 这些状态下没有画面是预期行为：刷新心跳，避免恢复后把「暂停期间没画面」误判为卡死
+          lastFrameAtMs.set(now)
+          lastHealthyAtMs = now
+        } else {
+          val lastFrame = lastFrameAtMs.get()
+          when {
+            // 之前有画面、现在连续 12s 没有新帧：无论音频是否还在，都判定画面卡死
+            framesEverRendered.get() && now - lastFrame >= STALL_TIMEOUT_MS -> {
+              fired = true
+              AppLog.w("DTV-Player", "video stalled: url=$url noFrame=${now - lastFrame}ms state=${player.playbackState}, requesting reload")
+              onStalledRef.value()
+              return
+            }
+            // 逐帧回调在少数机型/隧道解码下可能不生效：此时退化为「一直没在播」判定
+            !framesEverRendered.get() && player.isPlaying -> lastHealthyAtMs = now
+            !framesEverRendered.get() && now - lastHealthyAtMs >= STALL_TIMEOUT_MS -> {
+              fired = true
+              AppLog.w("DTV-Player", "no video frame and not playing: url=$url state=${player.playbackState}, requesting reload")
+              onStalledRef.value()
+              return
+            }
+          }
+        }
+        handler.postDelayed(this, STALL_CHECK_INTERVAL_MS)
+      }
+    }
+    handler.postDelayed(tick, STALL_CHECK_INTERVAL_MS)
+    onDispose {
+      handler.removeCallbacks(tick)
+      runCatching { player.clearVideoFrameMetadataListener(frameListener) }
+    }
+  }
+
   DisposableEffect(player, url) {
+    var lastBehindLiveWindowRetryMs = 0L
     val listener = object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
         AppLog.e("DTV-Player", "ExoPlayer error url=$url code=${error.errorCodeName}", error)
         if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
-          // live HLS sometimes falls behind; reset and retry
-          runCatching {
-            player.seekToDefaultPosition()
-            player.prepare()
+          // 只在 30s 内允许一次「原地 seek 回直播边缘」。旧逻辑无限次吞掉这个错误，
+          // seekToDefaultPosition()+prepare() 又常常恢复不了（地址/会话已过期），
+          // 结果就是画面永久停在最后一帧、上层完全收不到任何通知。
+          // 超出窗口仍失败时把错误交给播放页，走重取地址 + 重建播放器。
+          val now = SystemClock.elapsedRealtime()
+          if (now - lastBehindLiveWindowRetryMs > BEHIND_LIVE_WINDOW_RETRY_WINDOW_MS) {
+            lastBehindLiveWindowRetryMs = now
+            runCatching {
+              player.seekToDefaultPosition()
+              player.prepare()
+            }
+            return
           }
+          AppLog.w("DTV-Player", "behind live window repeatedly, escalating to full reload")
+          onError("直播窗口已落后，需要重新获取播放地址")
           return
         }
 

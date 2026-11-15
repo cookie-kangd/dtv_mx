@@ -174,6 +174,12 @@ fun PlayerScreen(
   // 每个房间给 2 次机会，成功起播后复位；额度用尽才把错误抛给用户。
   // 只对直播生效：点播地址失效重取也救不回来，没必要多转两圈。
   var autoReloadLeft by remember(streamer?.roomId) { mutableIntStateOf(2) }
+  // 播放器代次：每次失败重连都 +1，用 key(playerGeneration) 强制销毁旧实例。
+  // 重取到的地址可能与旧地址字符串完全相同，只靠 url 做 remember key 的话
+  // 那个已经死掉的 ExoPlayer 会被继续复用，画面永久停在最后一帧。
+  var playerGeneration by remember(streamer?.roomId) { mutableIntStateOf(0) }
+  // 失败恢复任务：同一时刻只允许一条，避免 onError / onStalled 叠加出多条重连链
+  var recoveryJob by remember { mutableStateOf<Job?>(null) }
 
 
   // 弹幕总开关：与字体大小/透明度/显示区域一样走 AppState 持久化。
@@ -602,6 +608,45 @@ fun PlayerScreen(
       }
     }
   }
+
+  /**
+   * 播放失败 / 卡帧的统一恢复入口。
+   *
+   * v0.2.26 的「断流自愈」只把 loading 置 true 却把已经出错的播放器留在组合树里：
+   * ExoPlayer 出错后停在最后一帧，于是画面不动、弹幕（独立 WebSocket）照常刷新；
+   * 而新解析到的地址若与旧地址字符串相同，remember(url, quality) 又不会重建播放器，
+   * 页面就彻底卡死、连重试入口都看不到。
+   * 现在改为：立刻摘掉旧播放器 → 强制换代 → 再重取地址；同时给静默卡帧兜底。
+   */
+  fun recoverPlayback(reason: String) {
+    val s = streamer ?: return
+    if (!s.isLive) return
+    val roomAtFailure = s.roomId
+    val canAutoRetry = autoReloadLeft > 0
+    if (canAutoRetry) autoReloadLeft -= 1
+
+    // 立即把旧播放器从组合树摘掉，画面区改显示加载态，而不是挂着最后一帧。
+    url = null
+    loading = true
+    error = null
+    videoReady = false
+    videoAspectRatio = null
+    playerGeneration += 1
+
+    recoveryJob?.cancel()
+    recoveryJob = scope.launch {
+      if (canAutoRetry) delay(1_200)
+      if (currentRoomId.value != roomAtFailure) return@launch
+      if (canAutoRetry) {
+        reloadUrl()
+      } else {
+        // 额度用尽：不再无限抖动，把错误和「重试」按钮交给用户
+        loading = false
+        error = reason
+      }
+    }
+  }
+
   BoxWithConstraints(
     modifier = Modifier
       .fillMaxSize()
@@ -939,40 +984,39 @@ fun PlayerScreen(
         ) {
           Box(modifier = Modifier.fillMaxSize()) {
             if (url != null) {
-              StreamPlayer(
-                url = url!!,
-                fullscreen = fullscreen,
-                liveMode = true,
-                zoomToFill = verticalFullBleed,
-                backgroundAudio = listenOnly,
-                onVideoAspectRatioChanged = {
-                  videoAspectRatio = it
-                  if (it != null && it > 0f) videoReady = true
-                },
-                onError = {
-                  if (it.startsWith("__retry_http__:")) {
-                    error = null
-                    url = it.removePrefix("__retry_http__:")
-                  } else if (autoReloadLeft > 0 && streamer?.isLive == true) {
-                    // 断流自愈：先留在「加载中」而不是立刻弹错误，给 1.2s 让播放器
-                    // 自己恢复（弱网抖动很常见），再重取播放地址。
-                    autoReloadLeft -= 1
-                    error = null
-                    loading = true
-                    val roomAtError = streamer?.roomId
-                    scope.launch {
-                      delay(1_200)
-                      // 延迟窗口内可能已经切房：reloadUrl 是共享的 resolveJob 驱动的，
-                      // 这里若不校验房间，旧任务醒来会把「新房」正在跑的解析取消掉。
-                      if (currentRoomId.value == roomAtError) reloadUrl()
+              // key 让「同一地址重连」也一定销毁旧播放器实例：
+              // 死掉的 ExoPlayer 停在最后一帧，复用它就是画面永久不动。
+              key(playerGeneration) {
+                StreamPlayer(
+                  url = url!!,
+                  fullscreen = fullscreen,
+                  liveMode = true,
+                  zoomToFill = verticalFullBleed,
+                  backgroundAudio = listenOnly,
+                  onVideoAspectRatioChanged = {
+                    videoAspectRatio = it
+                    if (it != null && it > 0f) videoReady = true
+                  },
+                  onError = {
+                    if (it.startsWith("__retry_http__:")) {
+                      // 已知 CDN 的 IDN/SNI 问题：换成 http 重试，仍强制换代避免复用旧实例
+                      error = null
+                      loading = true
+                      videoReady = false
+                      videoAspectRatio = null
+                      playerGeneration += 1
+                      url = it.removePrefix("__retry_http__:")
+                    } else {
+                      recoverPlayback(it)
                     }
-                  } else {
-                    error = it
-                    url = null
-                  }
-                },
-                modifier = Modifier.fillMaxSize(),
-              )
+                  },
+                  onStalled = {
+                    // 静默卡帧（不抛 error 的那种）：与播放失败走同一条恢复链路
+                    recoverPlayback("直播画面长时间无进展，已停止自动重连，请点击重试")
+                  },
+                  modifier = Modifier.fillMaxSize(),
+                )
+              }
             } else {
               Box(
                 modifier = Modifier
@@ -1121,7 +1165,14 @@ fun PlayerScreen(
                   }
                 },
                 onOpenSettings = { showSettings = true },
-                onReload = { reloadUrl() },
+                onReload = {
+                  // 手动重试视为新的一轮：恢复自动重连额度并强制换代，
+                  // 避免复用已经死掉的播放器实例。
+                  autoReloadLeft = 2
+                  playerGeneration += 1
+                  error = null
+                  reloadUrl()
+                },
                 listenOnly = listenOnly,
                 onToggleListenOnly = {
                   val next = !listenOnly
