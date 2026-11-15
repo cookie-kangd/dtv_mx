@@ -1012,8 +1012,14 @@ fun PlayerScreen(
                 zoomToFill = verticalFullBleed,
                 backgroundAudio = listenOnly,
                 onVideoAspectRatioChanged = {
-                  videoAspectRatio = it
-                  if (it != null && it > 0f) videoReady = true
+                  // 只有拿到有效宽高比才更新。Media3 在刚 setPlayer / 尺寸未解析时
+                  // 会上报 VideoSize.UNKNOWN（aspect=null），若直接写回就会把
+                  // 重连时刻意保留的已知宽高比冲掉，横屏布局又退回未知状态。
+                  // 切房间时由 LaunchedEffect(roomId) 负责清空，不会串房间。
+                  if (it != null && it > 0f) {
+                    videoAspectRatio = it
+                    videoReady = true
+                  }
                 },
                 onError = {
                   if (it.startsWith("__retry_http__:")) {
