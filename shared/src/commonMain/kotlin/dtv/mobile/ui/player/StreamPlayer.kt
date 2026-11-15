@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 @Composable
 expect fun StreamPlayer(
   url: String,
+  playerGeneration: Int = 0,
   fullscreen: Boolean = false,
   liveMode: Boolean = true,
   zoomToFill: Boolean = false,

@@ -174,9 +174,9 @@ fun PlayerScreen(
   // 每个房间给 2 次机会，成功起播后复位；额度用尽才把错误抛给用户。
   // 只对直播生效：点播地址失效重取也救不回来，没必要多转两圈。
   var autoReloadLeft by remember(streamer?.roomId) { mutableIntStateOf(2) }
-  // 播放器代次：每次失败重连都 +1，用 key(playerGeneration) 强制销毁旧实例。
-  // 重取到的地址可能与旧地址字符串完全相同，只靠 url 做 remember key 的话
-  // 那个已经死掉的 ExoPlayer 会被继续复用，画面永久停在最后一帧。
+  // 播放器代次：解析到新地址后 +1，让 StreamPlayer 只重建 ExoPlayer 实例。
+  // 不用 key() 包住 StreamPlayer —— 那会连 PlayerView / SurfaceView 一起销毁重建，
+  // 横屏全屏下新 surface 常常挂不上（表现为「有声音但黑屏，切竖屏才恢复」）。
   var playerGeneration by remember(streamer?.roomId) { mutableIntStateOf(0) }
   // 失败恢复任务：同一时刻只允许一条，避免 onError / onStalled 叠加出多条重连链
   var recoveryJob by remember { mutableStateOf<Job?>(null) }
@@ -553,8 +553,10 @@ fun PlayerScreen(
     resolveJob = scope.launch {
       loading = true
       error = null
-      url = null
-      videoAspectRatio = null
+      // 不要把 url / videoAspectRatio 置 null：那会让 StreamPlayer 离开组合树，
+      // PlayerView 与其 SurfaceView 被销毁重建；横屏全屏下新 surface 往往挂不上，
+      // 出现「有声音但黑屏、切竖屏才恢复」。宽高比也保留作为布局占位，
+      // 新播放器上报尺寸后自然覆盖。切房间时由 LaunchedEffect(roomId) 清空。
       videoReady = false
       // 无论成功、失败、还是被下一个请求取消（含切房早退），loading 都必须复位。
       // 原来只在成功路径末尾写 loading = false，早退分支会漏掉 —— 万一哪条路径
@@ -604,7 +606,12 @@ fun PlayerScreen(
         // 解析期间若已切到别的直播间，这份结果作废，交给新房间的解析流程赋值
         if (currentRoomId.value != requestedRoomId) return@launch
         result
-          .onSuccess { url = it }
+          .onSuccess { resolved ->
+            // 强制换代：即使解析出的地址与旧地址字符串完全相同，也必须新建一个
+            // ExoPlayer 实例（旧实例已经卡死）。换代只重建播放器，不重建 PlayerView。
+            playerGeneration += 1
+            url = resolved
+          }
           .onFailure { error = it.message ?: "获取播放地址失败" }
       } finally {
         // 只在「结果仍然属于当前房间」且「自己没被后来者取代」时才复位 loading：
@@ -617,26 +624,28 @@ fun PlayerScreen(
   /**
    * 播放失败 / 卡帧的统一恢复入口。
    *
-   * v0.2.26 的「断流自愈」只把 loading 置 true 却把已经出错的播放器留在组合树里：
-   * ExoPlayer 出错后停在最后一帧，于是画面不动、弹幕（独立 WebSocket）照常刷新；
-   * 而新解析到的地址若与旧地址字符串相同，remember(url, quality) 又不会重建播放器，
-   * 页面就彻底卡死、连重试入口都看不到。
-   * 现在改为：立刻摘掉旧播放器 → 强制换代 → 再重取地址；同时给静默卡帧兜底。
+   * v0.2.26 的「断流自愈」只在 onPlayerError 触发且保留已死的播放器，
+   * 画面定格、弹幕照刷。这里统一收口，并给静默卡帧兜底。
+   *
+   * v0.2.29 关键修正：不再把 url 置 null、不再清空 videoAspectRatio。
+   * 之前那样做会让 StreamPlayer 离开组合树，PlayerView / SurfaceView 被销毁重建，
+   * 横屏全屏下新 surface 常常挂不上 —— 有声音但黑屏，切竖屏重新测量才恢复；
+   * 宽高比丢失还会让「退出全屏」按钮消失。现在只等 reloadUrl() 拿到新地址后
+   * 换代重建 ExoPlayer，View 全程保持 attach。
    */
   fun recoverPlayback(reason: String) {
     val s = streamer ?: return
     if (!s.isLive) return
+    // 重连期间旧播放器仍挂在 View 上，可能再次抛 error / stall。
+    // 一条恢复链就够，避免重复消耗额度或并发解析地址。
+    if (recoveryJob?.isActive == true) return
     val roomAtFailure = s.roomId
     val canAutoRetry = autoReloadLeft > 0
     if (canAutoRetry) autoReloadLeft -= 1
 
-    // 立即把旧播放器从组合树摘掉，画面区改显示加载态，而不是挂着最后一帧。
-    url = null
     loading = true
     error = null
     videoReady = false
-    videoAspectRatio = null
-    playerGeneration += 1
 
     recoveryJob?.cancel()
     recoveryJob = scope.launch {
@@ -992,39 +1001,50 @@ fun PlayerScreen(
           modifier = videoSurfaceModifier,
         ) {
           Box(modifier = Modifier.fillMaxSize()) {
-            if (url != null) {
-              // key 让「同一地址重连」也一定销毁旧播放器实例：
-              // 死掉的 ExoPlayer 停在最后一帧，复用它就是画面永久不动。
-              key(playerGeneration) {
-                StreamPlayer(
-                  url = url!!,
-                  fullscreen = fullscreen,
-                  liveMode = true,
-                  zoomToFill = verticalFullBleed,
-                  backgroundAudio = listenOnly,
-                  onVideoAspectRatioChanged = {
-                    videoAspectRatio = it
-                    if (it != null && it > 0f) videoReady = true
-                  },
-                  onError = {
-                    if (it.startsWith("__retry_http__:")) {
-                      // 已知 CDN 的 IDN/SNI 问题：换成 http 重试，仍强制换代避免复用旧实例
-                      error = null
-                      loading = true
-                      videoReady = false
-                      videoAspectRatio = null
-                      playerGeneration += 1
-                      url = it.removePrefix("__retry_http__:")
-                    } else {
-                      recoverPlayback(it)
-                    }
-                  },
-                  onStalled = {
-                    // 静默卡帧（不抛 error 的那种）：与播放失败走同一条恢复链路
-                    recoverPlayback("直播画面长时间无进展，已停止自动重连，请点击重试")
-                  },
+            if (url != null && error == null) {
+              // 不用 key()：重连时 PlayerView / SurfaceView 必须保持 attach。
+              // 换代信息作为普通参数传入，由 StreamPlayer 只重建 ExoPlayer 实例。
+              StreamPlayer(
+                url = url!!,
+                playerGeneration = playerGeneration,
+                fullscreen = fullscreen,
+                liveMode = true,
+                zoomToFill = verticalFullBleed,
+                backgroundAudio = listenOnly,
+                onVideoAspectRatioChanged = {
+                  videoAspectRatio = it
+                  if (it != null && it > 0f) videoReady = true
+                },
+                onError = {
+                  if (it.startsWith("__retry_http__:")) {
+                    // 已知 CDN 的 IDN/SNI 问题：换成 http 重试，仍强制换代避免复用旧实例
+                    error = null
+                    loading = true
+                    videoReady = false
+                    playerGeneration += 1
+                    url = it.removePrefix("__retry_http__:")
+                  } else {
+                    recoverPlayback(it)
+                  }
+                },
+                onStalled = {
+                  // 静默卡帧（不抛 error 的那种）：与播放失败走同一条恢复链路
+                  recoverPlayback("直播画面长时间无进展，已停止自动重连，请点击重试")
+                },
+                modifier = Modifier.fillMaxSize(),
+              )
+              // 重连期间旧流可能仍停在最后一帧，给一个明确的「正在重连」反馈。
+              // 放在 StreamPlayer 之后会覆盖在画面上，但不影响更后绘制的侧边控制栏。
+              if (loading) {
+                Box(
                   modifier = Modifier.fillMaxSize(),
-                )
+                  contentAlignment = Alignment.Center,
+                ) {
+                  CircularProgressIndicator(
+                    color = Color.White.copy(alpha = 0.9f),
+                    strokeWidth = 3.dp,
+                  )
+                }
               }
             } else {
               Box(
@@ -1161,7 +1181,11 @@ fun PlayerScreen(
             if (!isInPip) {
               PlayerSideControlsOverlay(
                 fullscreen = fullscreen,
-                showFullscreen = isVideoAspectKnown && !isVerticalVideo,
+                showFullscreen = shouldShowFullscreenButton(
+                  fullscreen = fullscreen,
+                  isVideoAspectKnown = isVideoAspectKnown,
+                  isVerticalVideo = isVerticalVideo,
+                ),
                 onToggleFullscreen = {
                   if (!isClosing) {
                     if (fullscreen) {
@@ -1175,10 +1199,10 @@ fun PlayerScreen(
                 },
                 onOpenSettings = { showSettings = true },
                 onReload = {
-                  // 手动重试视为新的一轮：恢复自动重连额度并强制换代，
-                  // 避免复用已经死掉的播放器实例。
+                  // 手动重试视为新的一轮：恢复自动重连额度。
+                  // 换代由 reloadUrl() 拿到新地址后统一做，不能在这里用旧地址
+                  // 立即重建（直播直链带一次性 token，二次连接会被 CDN 拒绝）。
                   autoReloadLeft = 2
-                  playerGeneration += 1
                   error = null
                   reloadUrl()
                 },

@@ -9,7 +9,6 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -221,6 +220,7 @@ private fun buildPlayer(
 @Composable
 actual fun StreamPlayer(
   url: String,
+  playerGeneration: Int,
   fullscreen: Boolean,
   liveMode: Boolean,
   zoomToFill: Boolean,
@@ -235,13 +235,15 @@ actual fun StreamPlayer(
   val quality = LocalVideoQuality.current
   // 兜底：构建播放器的任何一步失败都不允许把 App 带崩，
   // 失败时降级为"零可选配置"的最简播放器继续起播。
-  // 画质档位变化时重建播放器，使新的分辨率/码率策略立即生效。
+  // 画质档位变化，或播放页解析到新地址（含地址字符串相同但流已死的换代），
+  // 都会重建 ExoPlayer 实例；但 PlayerView 与 SurfaceView 始终复用同一个，
+  // 不随换代销毁重建 —— 横屏全屏下重建 surface 会出现「有声音但黑屏」。
   //
   // 听播（backgroundAudio）不参与 remember key：开关听播绝不重建播放器。
   // 直播直链（尤其斗鱼）带一次性签名 token，CDN 对同一 token 的并发/二次
   // 连接敏感，重建=重新请求同一地址 → 被拒或限流（无限加载/黑屏/画面卡死）。
   // 听播只摘掉/挂回视频画面，播放器实例与网络连接完全不动。
-  val player = remember(url, quality) {
+  val player = remember(url, quality, playerGeneration) {
     runCatching {
       buildPlayer(
         context = context,
@@ -455,90 +457,92 @@ actual fun StreamPlayer(
     player.addListener(listener)
     onDispose {
       // 1) 先摘除监听：销毁时 stop()/release() 仍会派发 onVideoSizeChanged 等回调，
-      //    若回调回播放页会造成退出瞬间的状态抖动，甚至重新拉起播放器（表现为要点两次返回）。
+      //    若回调回播放页会造成退出瞬间的状态抖动，甚至重新拉起播放器。
       player.removeListener(listener)
-      // 2) 再彻底销毁播放器：停止播放 → 清空媒体源 → 释放解码器/音频等底层资源，
-      //    确保关闭播放页后不再残留任何播放资源占用。
-      AppLog.i("DTV-Player", "destroying player url=$url")
-      runCatching {
-        player.playWhenReady = false
-        player.stop()
-        player.clearMediaItems()
-        player.release()
+      // 2) 延后一帧再彻底销毁：换代时 AndroidView.update 会先把新播放器挂到同一个
+      //    PlayerView 上，setPlayer() 需要对旧 player 调 clearVideoSurfaceView。
+      //    若这里同步 release，旧 player 已释放会引入竞态；post 到下一帧最稳。
+      Handler(Looper.getMainLooper()).post {
+        AppLog.i("DTV-Player", "destroying player url=$url")
+        runCatching {
+          player.playWhenReady = false
+          player.stop()
+          player.clearMediaItems()
+          player.release()
+        }
+        AppLog.i("DTV-Player", "player destroyed url=$url")
       }
-      AppLog.i("DTV-Player", "player destroyed url=$url")
     }
   }
 
-  // key(player)：播放器重建（换画质/换线路）时，把 PlayerView 与其内部
-  // SurfaceView 一并换新，避免旧 surface 复用带来的渲染隐患。
+  // PlayerView / SurfaceView 全程复用同一个实例，绝不随换代销毁重建。
+  // 之前用 key(player) 在换画质 / 重连时把 View 一起换新，横屏全屏下新
+  // SurfaceView 常常挂不上，表现为「有声音但黑屏，切竖屏重新测量才恢复」。
+  // 换代只换 ExoPlayer 实例：下面 update 里 view.player 变化会把同一个
+  // surface 重新绑到新播放器（PlayerView.setPlayer 的官方姿势）。
   //
   // 听播的「纯音频」通过 update 里的 clearVideoSurface 实现：
   // - 开启听播 → view.player 置 null 并 clearVideoSurface()，视频解码停止出画面，
   //   音频/网络连接完全不受影响（不重连、不切轨、不重建）；
-  // - 关闭听播 → view.player 重新挂回，ExoPlayer 用全新 surface 恢复视频渲染。
-  // 这是 ExoPlayer 官方的后台播放姿势，对所有平台/流一致，不存在斗鱼直链
-  // 二次请求被 CDN 拒绝的问题。
-  key(player) {
-    AndroidView(
-      modifier = modifier,
-      factory = {
-        PlayerView(it).apply {
-          useController = false
-          controllerAutoShow = false
-          // 播放页已经有自己的加载指示器；PlayerView 再叠一个缓冲转圈会产生
-          // 重复动画与无意义的 View 重绘。
-          setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-          resizeMode = if (zoomToFill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
-          // Keep screen on during playback (some Android 16 devices will otherwise follow a short system timeout).
-          keepScreenOn = true
-          this.player = player
-        }
-      },
-      onRelease = { view ->
-        // 复位屏幕常亮，避免离开播放页后系统仍保持常亮耗电
-        view.keepScreenOn = false
-        // Detach the player before the view is recycled so the composable-level
-        // release below is the only owner of the ExoPlayer lifecycle.
-        if (view.player === player) {
-          view.player = null
-        }
-      },
-      update = { view ->
-        // 先判断是否真的有变化：播放页每 120ms 弹幕批就会重组一次，
-        // 无条件的 requestLayout+invalidate 会让播放视图整帧白做一次
-        // 测量/布局/重绘（CPU 白烧）。仅在画质档位（resizeMode）、
-        // 听播开关（keepScreenOn）、播放器实例任一变化时才触发。
-        val targetResizeMode =
-          if (zoomToFill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
-        val targetKeepScreenOn = !backgroundAudio
-        val targetPlayer: Player? = if (backgroundAudio) null else player
-        val changed = view.resizeMode != targetResizeMode ||
-          view.keepScreenOn != targetKeepScreenOn ||
-          view.player !== targetPlayer
+  // - 关闭听播 → view.player 重新挂回，用同一个 surface 恢复视频渲染。
+  AndroidView(
+    modifier = modifier,
+    factory = {
+      PlayerView(it).apply {
+        useController = false
+        controllerAutoShow = false
+        // 播放页已经有自己的加载指示器；PlayerView 再叠一个缓冲转圈会产生
+        // 重复动画与无意义的 View 重绘。
+        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+        resizeMode = if (zoomToFill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+        // Keep screen on during playback (some Android 16 devices will otherwise follow a short system timeout).
+        keepScreenOn = true
+        this.player = player
+      }
+    },
+    onRelease = { view ->
+      // 复位屏幕常亮，避免离开播放页后系统仍保持常亮耗电
+      view.keepScreenOn = false
+      // Detach the player before the view is recycled so the composable-level
+      // release below is the only owner of the ExoPlayer lifecycle.
+      if (view.player === player) {
+        view.player = null
+      }
+    },
+    update = { view ->
+      // 先判断是否真的有变化：播放页每 120ms 弹幕批就会重组一次，
+      // 无条件的 requestLayout+invalidate 会让播放视图整帧白做一次
+      // 测量/布局/重绘（CPU 白烧）。仅在画质档位（resizeMode）、
+      // 听播开关（keepScreenOn）、播放器实例任一变化时才触发。
+      val targetResizeMode =
+        if (zoomToFill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+      val targetKeepScreenOn = !backgroundAudio
+      val targetPlayer: Player? = if (backgroundAudio) null else player
+      val changed = view.resizeMode != targetResizeMode ||
+        view.keepScreenOn != targetKeepScreenOn ||
+        view.player !== targetPlayer
 
-        view.resizeMode = targetResizeMode
-        view.useController = false
-        view.controllerAutoShow = false
-        // 听播时允许熄屏（画面已摘除，屏幕常亮毫无意义）
-        view.keepScreenOn = targetKeepScreenOn
-        if (view.player !== targetPlayer) {
-          view.player = targetPlayer
-          if (targetPlayer == null) {
-            // 显式清掉播放器上的输出 surface：视频解码停止出画面，
-            // 音频与网络连接保持原样（不重连直播流）。
-            runCatching { player.clearVideoSurface() }
-          }
+      view.resizeMode = targetResizeMode
+      view.useController = false
+      view.controllerAutoShow = false
+      // 听播时允许熄屏（画面已摘除，屏幕常亮毫无意义）
+      view.keepScreenOn = targetKeepScreenOn
+      if (view.player !== targetPlayer) {
+        view.player = targetPlayer
+        if (targetPlayer == null) {
+          // 显式清掉播放器上的输出 surface：视频解码停止出画面，
+          // 音频与网络连接保持原样（不重连直播流）。
+          runCatching { player.clearVideoSurface() }
         }
-        if (changed && targetPlayer != null) {
-          view.post {
-            view.requestLayout()
-            view.invalidate()
-          }
+      }
+      if (changed && targetPlayer != null) {
+        view.post {
+          view.requestLayout()
+          view.invalidate()
         }
-      },
-    )
-  }
+      }
+    },
+  )
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
