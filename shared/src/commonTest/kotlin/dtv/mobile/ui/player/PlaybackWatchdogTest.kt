@@ -143,6 +143,21 @@ class PlaybackWatchdogTest {
   }
 
   @Test
+  fun foregroundPauseDoesNotResetGrace() {
+    // 关键回归：前台 playWhenReady=false 绝不能被当成「预期暂停」返回 ResetGrace。
+    // 一旦 ResetGrace，调用方会不断刷新帧时间戳，帧永远不会「变旧」，
+    // Recover 也就永远不会触发 —— 又回到画面定格、弹幕照刷的老问题。
+    assertEquals(
+      WatchdogAction.Healthy,
+      decide(
+        lastFrameAtMs = 100_000L - 1_000L,
+        playWhenReady = false,
+        isPlaying = false,
+      ),
+    )
+  }
+
+  @Test
   fun freshHeartbeatAfterRecoveryDoesNotImmediatelyRetrigger() {
     assertEquals(
       WatchdogAction.Healthy,

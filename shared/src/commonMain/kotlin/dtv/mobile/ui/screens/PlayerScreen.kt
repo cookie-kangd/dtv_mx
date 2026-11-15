@@ -253,12 +253,17 @@ fun PlayerScreen(
   // 画质/线路切换触发的地址解析任务：再次切换或切房时先取消上一个，避免旧结果覆盖新结果
   var resolveJob by remember { mutableStateOf<Job?>(null) }
 
-  // 断流自愈额度只在「稳定播出 8 秒」后复位：若在起播瞬间复位，遇到「播几秒就被掐」
-  // 的流会退化成无限抖动（2 次额度永远用不完）。放在 videoReady 之后声明，
-  // 否则 LaunchedEffect 的 key 引用不到该状态。
+  // 自愈额度只在「稳定播出 45 秒」后复位。
+  // 两个约束决定了这个窗口不能短：
+  // 1) 卡帧看门狗判定一次卡死需要 12s（从未出帧则 30s），若复位窗口比它还短，
+  //    「重连 → 8s 后额度复位 → 又卡死 → 再重连」会形成无限循环，比定格更烦人；
+  // 2) 音频焦点被别的应用长期占用时重建播放器也救不回来，必须让额度真正耗尽，
+  //    把错误和手动重试入口交给用户。45s 远大于判定窗口，同时正常观看几分钟后
+  //    额度早已复位，长时间观看偶发断流仍能自动恢复。
+  // 放在 videoReady 之后声明，否则 LaunchedEffect 的 key 引用不到该状态。
   LaunchedEffect(videoReady, streamer?.roomId) {
     if (videoReady) {
-      delay(8_000)
+      delay(45_000)
       autoReloadLeft = 2
     }
   }
